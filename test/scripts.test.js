@@ -22,7 +22,8 @@ function run(script, args, env) {
 async function withMock(fn) {
   const mock = createMock();
   const url = await mock.listen();
-  const env = { KINTONE_BASE_URL: url, KINTONE_DOMAIN: 'mock.example', KINTONE_USER: 'u', KINTONE_PASSWORD: 'p', KINTONE_APP_ID: '575' };
+  // 本物のバックアップ（backup/）に影響されないよう、テストごとに空の保存先を使う
+  const env = { KINTONE_BACKUP_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'kd-backup-')), KINTONE_BASE_URL: url, KINTONE_DOMAIN: 'mock.example', KINTONE_USER: 'u', KINTONE_PASSWORD: 'p', KINTONE_APP_ID: '575' };
   try { await fn(mock, env); } finally { await mock.close(); }
 }
 
@@ -75,7 +76,7 @@ test('backup → apply-customize：バックアップなしは実行しない／
     mock.state.apps['575'].customize.desktop.js = [{ type: 'URL', url: 'https://example.com/a.js' }, { type: 'FILE', file: { fileKey: oldKey, name: 'existing.js' } }];
     mock.state.apps['575'].customize.desktop.css = [{ type: 'URL', url: 'https://example.com/a.css' }];
     // すでにある backup/ を壊さないよう、テスト用に別の作業場所で動かす
-    const backupDir = path.join(ROOT, 'backup');
+    const backupDir = env.KINTONE_BACKUP_DIR;
     const had = fs.existsSync(backupDir) ? fs.readdirSync(backupDir) : [];
 
     let r = await run('apply-customize.js', [], env);
@@ -155,7 +156,7 @@ test('e2e-check：雛形→差し込み→案件くんの書類保管表に保�
 test('add-doc-storage：確認だけでは変えない／バックアップなしは止まる／足すと書類保管表ができ、既存は変わらない／2回目は止まる', async () => {
   await withMock(async (mock, env) => {
     mock.addApp('575', '案件くん', { fields: { c_name: { type: 'SINGLE_LINE_TEXT', code: 'c_name', label: '案件名' } } });
-    const backupDir = path.join(__dirname, '..', 'backup');
+    const backupDir = env.KINTONE_BACKUP_DIR;
     const had = fs.existsSync(backupDir) ? fs.readdirSync(backupDir) : [];
     try {
       let r = await run('add-doc-storage.js', [], env);

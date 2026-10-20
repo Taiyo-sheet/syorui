@@ -19,7 +19,7 @@ const { SUB } = require('../customize/doc-button.js');
 const ROOT = path.join(__dirname, '..');
 
 const TABLE = {
-  type: 'SUBTABLE', code: SUB.table,
+  type: 'SUBTABLE', code: SUB.table, label: '書類保管',
   fields: {
     [SUB.name]: { type: 'SINGLE_LINE_TEXT', code: SUB.name, label: '書類名' },
     [SUB.stage]: { type: 'SINGLE_LINE_TEXT', code: SUB.stage, label: '工程' },
@@ -30,7 +30,7 @@ const TABLE = {
 };
 
 function hasBackup(appId) {
-  const d = path.join(ROOT, 'backup');
+  const d = process.env.KINTONE_BACKUP_DIR || path.join(ROOT, 'backup');
   return fs.existsSync(d) && fs.readdirSync(d).some((n) => n.startsWith(appId + '_') && fs.existsSync(path.join(d, n, 'customize_live.json')));
 }
 

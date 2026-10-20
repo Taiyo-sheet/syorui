@@ -22,7 +22,7 @@ const { client } = require('./lib');
 const ROOT = path.join(__dirname, '..');
 
 function hasBackup(appId) {
-  const d = path.join(ROOT, 'backup');
+  const d = process.env.KINTONE_BACKUP_DIR || path.join(ROOT, 'backup');
   return fs.existsSync(d) && fs.readdirSync(d).some((n) => n.startsWith(appId + '_') && fs.existsSync(path.join(d, n, 'customize_live.json')));
 }
 const label = (it) => it.type === 'URL' ? it.url : (it.file && it.file.name) || '(ファイル)';
