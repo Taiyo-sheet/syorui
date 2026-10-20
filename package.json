@@ -1,0 +1,24 @@
+{
+  "name": "kintone-docs",
+  "version": "1.0.0",
+  "private": true,
+  "description": "キントーン「工程別 書類作成・保存」の構築スクリプト",
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "create-apps": "node scripts/create-apps.js",
+    "backup": "node scripts/backup-app.js",
+    "apply-customize": "node scripts/apply-customize.js",
+    "make-test-templates": "node scripts/make-test-templates.js",
+    "e2e": "node scripts/e2e-check.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "jszip": "^3.10.1"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.49.1"
+  }
+}
