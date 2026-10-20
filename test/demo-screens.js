@@ -57,7 +57,7 @@ const PAGE = (type) => `
 (async () => {
   const mock = createMock(); const url = await mock.listen();
   const tpl = await build();
-  mock.addApp('575', '案件くん'); mock.addApp('10', '書類マスタ'); mock.addApp('11', '案件書類');
+  mock.addApp('575', '案件くん'); mock.addRecord('575', { 書類保管: { type: 'SUBTABLE', value: [] } }); mock.addApp('10', '書類マスタ');
   const word = mock.addFile(tpl.docx, 'tpl.docx'), xl = mock.addFile(tpl.xlsx, 'tpl.xlsx');
   // {{ }} のない雛形（使い回す手引き）
   const zp = await JSZip.loadAsync(tpl.docx);
@@ -84,7 +84,8 @@ const PAGE = (type) => `
     else add(r, r['書類名'], '共通');
   });
   // この案件では、作業手順書が v2、安全書類一式が v1 まで作成済み
-  const saved = (name, stage, v) => mock.addRecord('11', { 案件ID: { value: '1' }, 書類名: { value: name }, 工程: { value: stage }, 版: { value: String(v) }, 添付ファイル: { value: [] } });
+  const rowsSaved = [];
+  const saved = (name, stage, v) => { rowsSaved.push({ id: String(rowsSaved.length + 1), value: { 書類保管_書類名: { value: name }, 書類保管_工程: { value: stage }, 書類保管_版: { value: String(v) }, 書類保管_作成日: { value: '2026-10-19' }, 書類保管_ファイル: { value: [] } } }); mock.state.records['575'][0]['書類保管'].value = rowsSaved; };
   saved('作業手順書', '施工前の書類', 2); saved('安全書類一式', '施工前の書類', 1); saved('打合せ議事次第', '打合せ・見積・提案', 1); saved('見積書', '打合せ・見積・提案', 1);
 
   const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });

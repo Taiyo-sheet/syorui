@@ -46,11 +46,16 @@ const RECORD = {
   c_amount: { type: 'NUMBER', value: '1234567' }, c_no: { type: 'NUMBER', value: '2026' },
 };
 
+// 案件1の「書類保管」表の行を、読みやすい形で返す
+const stored = (mock) => mock.state.records['575'][0]['書類保管'].value.map((r) => ({
+  name: r.value['書類保管_書類名'].value, stage: r.value['書類保管_工程'].value, version: r.value['書類保管_版'].value, file: r.value['書類保管_ファイル'].value[0],
+}));
+
 async function seed(mock) {
   const tpl = await build();
   mock.addApp('575', '案件くん');
+  mock.addRecord('575', { 書類保管: { type: 'SUBTABLE', value: [] } });   // 案件くんの「書類保管」表（案件1）
   mock.addApp('10', '書類マスタ');
-  mock.addApp('11', '案件書類');
   const k1 = mock.addFile(tpl.docx, '議事次第.docx');
   const k2 = mock.addFile(tpl.xlsx, '現状確認.xlsx');
   // {{ }} を1つも含まない雛形（標準の手引きのような、使い回す書類）。
@@ -116,13 +121,13 @@ test('画面：ボタン表示→工程・立場の絞り込み→作成して�
     const [dl1] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: '作成して保存' }).click()]);
     await page.getByText(/保存してダウンロードしました：東京Aビル 改修工事_打合せ議事次第_v1\.docx/).waitFor();
     const got = []; for await (const c of await dl1.createReadStream()) got.push(c);
-    const docs = mock.state.records['11'];
+    const docs = stored(mock);
     assert.strictEqual(docs.length, 1);
-    assert.strictEqual(docs[0]['案件ID'].value, '1');
-    assert.strictEqual(docs[0]['版'].value, '1');
-    assert.strictEqual(docs[0]['工程'].value, '打合せ・見積・提案');
-    const f = docs[0]['添付ファイル'].value[0];
-    assert.ok(Buffer.concat(got).equals(mock.state.files[f.fileKey].buf), 'ダウンロードされた書類と、案件書類に保存された書類が同じ');
+    assert.strictEqual(docs[0].name, '打合せ議事次第');
+    assert.strictEqual(docs[0].version, '1');
+    assert.strictEqual(docs[0].stage, '打合せ・見積・提案');
+    const f = docs[0].file;
+    assert.ok(Buffer.concat(got).equals(mock.state.files[f.fileKey].buf), 'ダウンロードされた書類と、案件に保存された書類が同じ');
     const xml = await (await JSZip.loadAsync(mock.state.files[f.fileKey].buf)).file('word/document.xml').async('string');
     assert.match(xml.replace(/<[^>]*>/g, ''), /案件名：東京Aビル 改修工事/);
     assert.match(xml.replace(/<[^>]*>/g, ''), /打合せ議事次第 v1 /);
@@ -136,10 +141,13 @@ test('画面：ボタン表示→工程・立場の絞り込み→作成して�
     await page.locator('select').nth(0).selectOption('打合せ・見積・提案');
     await page.getByText('最新 v1').waitFor();
     assert.match(await page.locator('select').nth(0).textContent(), /打合せ・見積・提案（作成済 1\/1）/);
-    assert.match(await page.getByRole('link', { name: '開く' }).getAttribute('href'), /\/k\/11\/show#record=1$/);
+    // 「開く」で、保存した書類（v1）が取り出せる
+    const [dlOpen] = await Promise.all([page.waitForEvent('download'), page.getByRole('link', { name: '開く' }).click()]);
+    const again = []; for await (const c of await dlOpen.createReadStream()) again.push(c);
+    assert.ok(Buffer.concat(again).equals(mock.state.files[f.fileKey].buf), '「開く」で、保存した書類が取り出せる');
     await page.getByRole('button', { name: 'v2 を作成' }).click();
     await page.getByText(/_v2\.docx/).waitFor();
-    assert.deepStrictEqual(mock.state.records['11'].map((r) => r['版'].value), ['1', '2']);
+    assert.deepStrictEqual(stored(mock).map((r) => r.version), ['1', '2'], 'v1 の行は残り、v2 が足される');
     assert.deepStrictEqual(errors, [], 'ブラウザのエラーなし');
   } finally { await browser.close(); await mock.close(); }
 });
@@ -154,8 +162,8 @@ test('画面：まとめて作成（雛形のある書類だけ）', { skip }, a
     await page.getByText('工程別の書類：').waitFor();
     await page.getByRole('button', { name: 'この工程をまとめて作成' }).click();
     await page.getByText('1件を保存しました').waitFor();   // 雛形が未登録の1件は対象外
-    assert.deepStrictEqual(mock.state.records['11'].map((r) => r['書類名'].value), ['現状確認シート']);
-    const f = mock.state.records['11'][0]['添付ファイル'].value[0];
+    assert.deepStrictEqual(stored(mock).map((r) => r.name), ['現状確認シート']);
+    const f = stored(mock)[0].file;
     assert.strictEqual(f.name, '東京Aビル 改修工事_現状確認シート_v1.xlsx');
     assert.deepStrictEqual(errors, []);
   } finally { await browser.close(); await mock.close(); }
@@ -172,12 +180,12 @@ test('画面（モバイル）：ボタンが出て、作成して保存でき�
     await page.locator('select').nth(0).selectOption('打合せ・見積・提案');
     await page.getByRole('button', { name: '作成して保存' }).click();
     await page.getByText(/ダウンロードしました/).waitFor();
-    assert.strictEqual(mock.state.records['11'].length, 1);
+    assert.strictEqual(stored(mock).length, 1);
     assert.deepStrictEqual(errors, []);
   } finally { await browser.close(); await mock.close(); }
 });
 
-test('画面：{{ }}のない雛形は「雛形を開く」（そのまま保存・案件書類には保存しない）。まとめて作成の対象外', { skip }, async () => {
+test('画面：{{ }}のない雛形は「雛形を開く」（そのまま保存・案件には保存しない）。まとめて作成の対象外', { skip }, async () => {
   const mock = createMock(); const url = await mock.listen();
   const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
   try {
@@ -192,18 +200,18 @@ test('画面：{{ }}のない雛形は「雛形を開く」（そのまま保存
     await page.getByRole('button', { name: '作成して保存' }).waitFor();
     await page.getByRole('button', { name: '雛形を開く' }).waitFor();
     await page.getByText('雛形のまま使う書類（案件の情報は入れません）').waitFor();
-    // 雛形を開く：ダウンロードされる（元のファイル名・中身そのまま）。案件書類には保存されない
+    // 雛形を開く：ダウンロードされる（元のファイル名・中身そのまま）。案件には保存されない
     const [dl] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: '雛形を開く' }).click()]);
     assert.strictEqual(dl.suggestedFilename(), 'standard-guide.docx');
     const saved = await dl.createReadStream(); const chunks = []; for await (const c of saved) chunks.push(c);
     assert.ok(Buffer.concat(chunks).equals(mock.state.files['fk3'].buf), '雛形がそのまま渡る');
     await page.getByText(/雛形のまま保存しました：standard-guide\.docx/).waitFor();
-    assert.strictEqual(mock.state.records['11'].length, 0, '案件書類には保存しない');
+    assert.strictEqual(stored(mock).length, 0, '案件には保存しない');
     // まとめて作成：{{ }}のある書類だけ（雛形のままの1件は対象外）
     await page.getByRole('button', { name: 'この工程をまとめて作成' }).click();
     await page.getByText('1件を保存しました').waitFor();
     assert.ok(dialogs.some((m) => /1件の書類を作成します/.test(m) && /雛形のまま使う 1件/.test(m)), dialogs.join('|'));
-    assert.deepStrictEqual(mock.state.records['11'].map((r) => r['書類名'].value), ['打合せ議事次第']);
+    assert.deepStrictEqual(stored(mock).map((r) => r.name), ['打合せ議事次第']);
     assert.deepStrictEqual(errors, []);
   } finally { await browser.close(); await mock.close(); }
 });
@@ -250,7 +258,7 @@ test('画面：対象（橋梁／一般道路）で、仕様書を出し分け�
     assert.strictEqual(await page.getByText('【一般道路用】').count(), 1, '説明の行に対象を表示');
     await page.locator('div[style*="border-top"]', { hasText: '仕様書（一般道路）' }).getByRole('button').click();
     await page.getByText(/_仕様書（一般道路）_v1\.docx/).waitFor();
-    assert.deepStrictEqual(mock.state.records['11'].map((r) => r['書類名'].value), ['仕様書（一般道路）']);
+    assert.deepStrictEqual(stored(mock).map((r) => r.name), ['仕様書（一般道路）']);
     assert.deepStrictEqual(errors, []);
   } finally { await browser.close(); await mock.close(); }
 });

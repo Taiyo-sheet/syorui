@@ -1,14 +1,15 @@
 'use strict';
 /*
  * 「作成して保存」と同じ処理を、手元（Node）から実際のキントーンに対して通しで行い、結果を確かめる。
- * 画面（ボタン）以外の全部：書類マスタの雛形の取得 → 案件くんの値の差し込み → 案件書類への保存 → 保存物の中身の確認
+ * 画面（ボタン）以外の全部：書類マスタの雛形の取得 → 案件くんの値の差し込み → 案件くんの「書類保管」表への保存 → 保存物の中身の確認
  * ※ 画面のボタン操作そのものは、ブラウザで案件を開いて手で確認する（手順書の「動作確認」を参照）
  *
  *   node scripts/e2e-check.js --record=案件くんのレコード番号 --doc=書類名 [--cleanup]
  *
- *   --cleanup … 確認のために作った案件書類のレコードを、確認後に削除する（この実行で作った1件だけ）
+ *   --cleanup … 確認のために足した「書類保管」表の1行を、確認後に取り除く（もとの表に戻す）
  *
- * 案件くんは読むだけ。書き込むのは案件書類アプリへの1件の追加（--cleanup なら削除まで）。
+ * 案件くんへの書き込みは、「書類保管」表への1行の追加だけ（--cleanup なら、もとに戻すまで）。
+ * 先に scripts/add-doc-storage.js で「書類保管」表を足しておくこと。
  */
 const JSZip = require('jszip');
 const { client } = require('./lib');
@@ -32,8 +33,17 @@ async function main() {
   const results = [];
   const check = (ok, msg) => { results.push(ok); console.log((ok ? 'OK  ' : 'NG  ') + msg); };
 
-  const masterId = await one(k, '書類マスタ'), docsId = await one(k, '案件書類');
+  const masterId = await one(k, '書類マスタ');
   const proj = (await k.api('GET', '/k/v1/record', { app: projectApp, id: recordId })).record;
+  const S = lib.SUB;
+  if (!proj[S.table]) throw new Error('案件くんに「' + S.table + '」の表がありません。先に scripts/add-doc-storage.js で足してください');
+  const cell = (row, c) => (row.value[c] && row.value[c].value != null ? String(row.value[c].value) : '');
+  const keep = (row) => {
+    const v = {}; [S.name, S.stage, S.version, S.at].forEach((c) => { v[c] = { value: cell(row, c) }; });
+    v[S.file] = { value: ((row.value[S.file] && row.value[S.file].value) || []).map((f) => ({ fileKey: f.fileKey })) };
+    return { id: row.id, value: v };
+  };
+  const rowsBefore = proj[S.table].value;
   const props = (await k.api('GET', '/k/v1/app/form/fields', { app: projectApp })).properties;
   const map = {}; Object.keys(proj).forEach((c) => { map[c] = c; });
   Object.keys(props).forEach((c) => { if (props[c].label) map[String(props[c].label).trim()] = props[c].code || c; });
@@ -49,28 +59,30 @@ async function main() {
   const tplBuf = await k.download(tpl.fileKey);
   console.log('雛形：' + tpl.name + '（' + tplBuf.length + 'バイト）');
 
-  const lq = lib.DF.projectId + ' = ' + Number(recordId) + ' and ' + lib.DF.name + ' = ' + lib.quote(docName) + ' order by ' + lib.DF.version + ' desc limit 1';
-  const last = (await k.api('GET', '/k/v1/records', { app: docsId, query: lq, fields: ['$id', lib.DF.version] })).records[0];
-  const version = (last ? Number(last[lib.DF.version].value) : 0) + 1;
+  const version = Math.max(0, ...rowsBefore.filter((r) => cell(r, S.name) === docName).map((r) => Number(cell(r, S.version) || 0))) + 1;
   const all = Object.assign({}, values, { '版': 'v' + version, '書類名': docName });
   const out = await lib.fillTemplate(JSZip, tplBuf, ext, all);
 
   let projectName = ''; NAME_LABELS.some((l) => { if (values[l]) { projectName = values[l]; return true; } return false; });
   const filename = lib.buildFilename(projectName || '案件' + recordId, docName, version, ext);
   const fileKey = await k.upload(out.data, filename);
-  const rec = {};
-  rec[lib.DF.projectId] = { value: String(recordId) };
-  rec[lib.DF.name] = { value: docName };
-  rec[lib.DF.stage] = { value: mr[lib.MF.stage].value };
-  rec[lib.DF.version] = { value: String(version) };
-  rec[lib.DF.file] = { value: [{ fileKey }] };
-  const saved = await k.api('POST', '/k/v1/record', { app: docsId, record: rec });
-  console.log('案件書類に保存しました：レコード ' + saved.id + '（v' + version + '）');
+  const row = { value: {} };
+  row.value[S.name] = { value: docName };
+  row.value[S.stage] = { value: mr[lib.MF.stage].value };
+  row.value[S.version] = { value: String(version) };
+  row.value[S.at] = { value: new Date().toISOString().slice(0, 10) };
+  row.value[S.file] = { value: [{ fileKey }] };
+  const upd = {}; upd[S.table] = { value: rowsBefore.map(keep).concat([row]) };
+  await k.api('PUT', '/k/v1/record', { app: projectApp, id: recordId, revision: proj.$revision.value, record: upd });
+  console.log('案件くんの「' + S.table + '」表に保存しました（v' + version + '）');
 
   // 保存された書類を取り直して、中身を確かめる
-  const back = (await k.api('GET', '/k/v1/record', { app: docsId, id: saved.id })).record;
-  check(Number(back[lib.DF.version].value) === version && Number(back[lib.DF.projectId].value) === Number(recordId), '案件ID・版が正しく保存されています');
-  const f = back[lib.DF.file].value[0];
+  const back = (await k.api('GET', '/k/v1/record', { app: projectApp, id: recordId })).record;
+  const rowsAfter = back[S.table].value;
+  check(rowsAfter.length === rowsBefore.length + 1, '表の行数：' + rowsBefore.length + ' → ' + rowsAfter.length + '（既存の行は消えていません）');
+  const mine = rowsAfter.find((r) => cell(r, S.name) === docName && Number(cell(r, S.version)) === version);
+  check(!!mine, '書類名・版が正しく保存されています');
+  const f = mine && mine.value[S.file].value[0];
   check(!!f && f.name === filename, 'ファイル名：' + (f && f.name));
   if (['docx', 'xlsx', 'pptx'].includes(ext)) {
     const zip = await JSZip.loadAsync(await k.download(f.fileKey));
@@ -82,9 +94,11 @@ async function main() {
   } else console.log('（' + ext + ' は差し込みなしのコピーです）');
 
   if (cleanup) {
-    await k.api('DELETE', '/k/v1/records', { app: docsId, ids: [Number(saved.id)] });
-    console.log('確認用に作った案件書類のレコード ' + saved.id + ' を削除しました');
-  } else console.log('※ 確認用のレコード ' + saved.id + ' は残してあります（案件書類アプリで確認・削除できます）');
+    const cur = (await k.api('GET', '/k/v1/record', { app: projectApp, id: recordId })).record;
+    const orig = {}; orig[S.table] = { value: rowsBefore.map(keep) };
+    await k.api('PUT', '/k/v1/record', { app: projectApp, id: recordId, revision: cur.$revision.value, record: orig });
+    console.log('確認用に足した「' + S.table + '」の1行を取り除きました（もとの表に戻しました）');
+  } else console.log('※ 確認用の1行は残してあります（案件くんのレコード ' + recordId + ' の「' + S.table + '」表で確認・削除できます）');
 
   console.log('\n' + (results.every(Boolean) ? '結果：すべてOK' : '結果：NGがあります'));
   process.exit(results.every(Boolean) ? 0 : 5);

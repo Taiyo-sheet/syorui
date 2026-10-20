@@ -4,10 +4,10 @@
  * 案件くんの詳細画面の上部に「書類を作る」ボタンが出ます。押すと、
  *   ・書類マスタの書類が工程別に並ぶ（工程・立場の選択肢も書類マスタから自動で読み取る）
  *   ・「作成して保存」で、雛形の {{案件くんの項目名}} が案件の値に置き換わり、
- *     「案件書類」アプリに版つきで保存される
+ *     案件くんのこの案件の「書類保管」表に、版つきで保存される（別のアプリは使いません）
  *
  * 設定は要りません。
- *   ・アプリは名前（書類マスタ／案件書類）で自動で見つけます
+ *   ・書類マスタは名前で自動で見つけます。保管用の「書類保管」表は、案件くんに scripts/add-doc-storage.js で足します
  *   ・雛形の {{ }} には、案件くんの「項目名」をそのまま書けば入ります
  *     例）{{案件名}} {{現場住所}} {{発注者}}   ※項目コードでも可
  *   ・このほか {{作成日}} {{版}} {{書類名}} も使えます
@@ -21,10 +21,11 @@
 (function () {
   'use strict';
 
-  var APP_NAMES = { master: '書類マスタ', docs: '案件書類' };
-  // 書類マスタ・案件書類の項目コード（scripts/create-apps.js で作ると、この名前になる）
+  var APP_NAMES = { master: '書類マスタ' };
+  // 書類マスタの項目コード（scripts/create-apps.js で作ると、この名前になる）
   var MF = { stage: '工程', order: '表示順', name: '書類名', desc: '説明', template: '雛形', audience: '見られる立場', target: '対象', status: '使用状況' };
-  var DF = { projectId: '案件ID', name: '書類名', stage: '工程', version: '版', file: '添付ファイル' };
+  // 案件くんの「書類保管」表（scripts/add-doc-storage.js で足す）の項目コード
+  var SUB = { table: '書類保管', name: '書類保管_書類名', stage: '書類保管_工程', version: '書類保管_版', file: '書類保管_ファイル', at: '書類保管_作成日' };
   var ACTIVE = '使用中';
   var NAME_LABELS = ['案件名', '現場名', '工事名'];   // ファイル名に使う項目（先に見つかったもの）
   // 案件くんの項目のうち、「橋梁」「一般道路」など、書類マスタの「対象」と同じ言葉が入っているもの。
@@ -157,7 +158,7 @@
   // Node（テスト）から使うときは、ここまでの部品だけを渡して終わる
   if (typeof kintone === 'undefined') {
     if (typeof module !== 'undefined' && module.exports) {
-      module.exports = { fieldText: fieldText, replacePlaceholders: replacePlaceholders, fillTemplate: fillTemplate, hasPlaceholders: hasPlaceholders, guessTarget: guessTarget, buildFilename: buildFilename, buildValues: buildValues, quote: quote, DF: DF, MF: MF, today: today };
+      module.exports = { fieldText: fieldText, replacePlaceholders: replacePlaceholders, fillTemplate: fillTemplate, hasPlaceholders: hasPlaceholders, guessTarget: guessTarget, buildFilename: buildFilename, buildValues: buildValues, quote: quote, SUB: SUB, MF: MF, today: today };
     }
     return;
   }
@@ -226,7 +227,7 @@
     });
   }
 
-  // 雛形をそのまま保存（ダウンロード）する。案件書類には保存しない
+  // 雛形をそのまま保存（ダウンロード）する。案件には保存しない
   function saveAs(data, filename) {
     var url = URL.createObjectURL(new Blob([data]));
     var a = document.createElement('a');
@@ -254,28 +255,37 @@
     return download(tpl.fileKey).then(function (buf) { saveAs(buf, tpl.name); return tpl.name; });
   }
 
-  // ---------- 案件書類 ----------
-  function loadExisting(projectId) {
-    return findAppId(APP_NAMES.docs).then(function (appId) {
-      var q = DF.projectId + ' = ' + Number(projectId) + ' order by ' + DF.version + ' desc limit 500';
-      return api('GET', '/k/v1/records', { app: appId, query: q, fields: ['$id', DF.name, DF.version] }).then(function (r) {
-        var map = {};
-        r.records.forEach(function (rec) {
-          var n = rec[DF.name].value;
-          if (!map[n]) map[n] = { version: Number(rec[DF.version].value || 0), id: rec.$id.value };
-        });
-        return map;
-      });
+  // ---------- 書類の保管（案件くんの「書類保管」表） ----------
+  function projectRecord(projectId) {
+    return api('GET', '/k/v1/record', { app: appApi.getId(), id: projectId }).then(function (r) {
+      if (!r.record[SUB.table]) throw new Error('案件くんに「' + SUB.table + '」の表がありません。先に scripts/add-doc-storage.js で追加してください');
+      return r.record;
     });
   }
-  // 保存の直前にもう一度、最新の版を確かめる（同時に別の人が作ったときに、同じ版が2つできないように）
-  function latestVersion(appId, projectId, docName) {
-    var q = DF.projectId + ' = ' + Number(projectId) + ' and ' + DF.name + ' = ' + quote(docName) + ' order by ' + DF.version + ' desc limit 1';
-    return api('GET', '/k/v1/records', { app: appId, query: q, fields: ['$id', DF.version] }).then(function (r) {
-      return r.records.length ? Number(r.records[0][DF.version].value || 0) : 0;
+  function rowsOf(record) { return (record[SUB.table] && record[SUB.table].value) || []; }
+  function cellText(row, code) { var f = row.value[code]; return f && f.value != null ? String(f.value) : ''; }
+  // 書類名ごとの最新版（同じ版が並んだときは、後ろの行を採る）
+  function existingOf(record) {
+    var map = {};
+    rowsOf(record).forEach(function (row) {
+      var n = cellText(row, SUB.name), v = Number(cellText(row, SUB.version) || 0), files = row.value[SUB.file] && row.value[SUB.file].value;
+      if (n && (!map[n] || v >= map[n].version)) map[n] = { version: v, file: files && files[0] ? files[0] : null };
     });
+    return map;
   }
-  function docUrl(appId, id) { return location.origin + '/k/' + (isMobile ? 'm/' : '') + appId + '/show' + (isMobile ? '?record=' + id : '#record=' + id); }
+  // 書類保管の既存の行を、そのまま送り直せる形にする（送らなかった行は消えてしまうため）
+  function keepRow(row) {
+    var v = {};
+    [SUB.name, SUB.stage, SUB.version, SUB.at].forEach(function (c) { v[c] = { value: cellText(row, c) }; });
+    v[SUB.file] = { value: ((row.value[SUB.file] && row.value[SUB.file].value) || []).map(function (f) { return { fileKey: f.fileKey }; }) };
+    return { id: row.id, value: v };
+  }
+  function isoToday() { var d = new Date(); return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
+  function openStored(ex) {
+    if (ex.data) { saveAs(ex.data, ex.filename); return Promise.resolve(ex.filename); }
+    if (!ex.file) return Promise.reject(new Error('保存された書類のファイルが見つかりません'));
+    return download(ex.file.fileKey).then(function (buf) { saveAs(buf, ex.file.name); return ex.file.name; });
+  }
 
   function createDoc(masterRec, ctx) {
     var docName = fieldText(masterRec[MF.name]);
@@ -284,22 +294,28 @@
     var tpl = files[0];
     var ext = ((tpl.name.match(/\.([^.]+)$/) || [])[1] || '').toLowerCase();
 
-    return findAppId(APP_NAMES.docs).then(function (docsAppId) {
-      return Promise.all([download(tpl.fileKey), latestVersion(docsAppId, ctx.projectId, docName)]).then(function (res) {
-        var version = res[1] + 1;
-        var values = Object.assign({}, ctx.values, { '版': 'v' + version, '書類名': docName });
-        return fillTemplate(JSZip, res[0], ext, values).then(function (out) {
-          var filename = buildFilename(ctx.projectName, docName, version, ext);
-          return upload(out.data, filename).then(function (fileKey) {
-            var rec = {};
-            rec[DF.projectId] = { value: String(ctx.projectId) };
-            rec[DF.name] = { value: docName };
-            rec[DF.stage] = { value: fieldText(masterRec[MF.stage]) };
-            rec[DF.version] = { value: String(version) };
-            rec[DF.file] = { value: [{ fileKey: fileKey }] };
-            return api('POST', '/k/v1/record', { app: docsAppId, record: rec }).then(function (r) {
-              return { filename: filename, id: r.id, version: version, unknown: out.unknown, data: out.data };
-            });
+    // 保存の直前に、案件を読み直して最新の版を確かめる（同時に別の人が作ったときに、同じ版が2つできないように）
+    return Promise.all([projectRecord(ctx.projectId), download(tpl.fileKey)]).then(function (res) {
+      var record = res[0], cur = existingOf(record)[docName];
+      var version = (cur ? cur.version : 0) + 1;
+      var values = Object.assign({}, ctx.values, { '版': 'v' + version, '書類名': docName });
+      return fillTemplate(JSZip, res[1], ext, values).then(function (out) {
+        var filename = buildFilename(ctx.projectName, docName, version, ext);
+        return upload(out.data, filename).then(function (fileKey) {
+          var row = { value: {} };
+          row.value[SUB.name] = { value: docName };
+          row.value[SUB.stage] = { value: fieldText(masterRec[MF.stage]) };
+          row.value[SUB.version] = { value: String(version) };
+          row.value[SUB.at] = { value: isoToday() };
+          row.value[SUB.file] = { value: [{ fileKey: fileKey }] };
+          var update = {};
+          update[SUB.table] = { value: rowsOf(record).map(keepRow).concat([row]) };
+          // revision を付けて更新する：読んだあとに別の人が案件を更新していたら、上書きせずに失敗する
+          return api('PUT', '/k/v1/record', { app: appApi.getId(), id: ctx.projectId, revision: record.$revision.value, record: update }).then(function () {
+            return { filename: filename, version: version, unknown: out.unknown, data: out.data };
+          }, function (e) {
+            if (e && e.code === 'GAIA_CO02') throw new Error('別の人が同時に、この案件を更新しました。もう一度押してください');
+            throw e;
           });
         });
       });
@@ -347,9 +363,9 @@
     overlay.appendChild(box);
     document.body.appendChild(overlay);
 
-    var masters = [], existing = {}, docsAppId = 0;
-    Promise.all([loadMaster(), loadExisting(ctx.projectId), findAppId(APP_NAMES.docs)]).then(function (res) {
-      masters = res[0]; existing = res[1]; docsAppId = res[2];
+    var masters = [], existing = {};
+    Promise.all([loadMaster(), projectRecord(ctx.projectId)]).then(function (res) {
+      masters = res[0]; existing = existingOf(res[1]);
       build();
     }).catch(function (e) { body.textContent = ''; body.appendChild(el('div', 'color:#c0392b', '読み込めませんでした：' + ((e && e.message) || ''))); });
 
@@ -398,7 +414,7 @@
       // 作成に成功したら、画面上の「最新 vN」もその場で更新する（まとめ作成が途中で失敗しても、再実行で二重に作らない）
       function makeOne(rec) {
         return createDoc(rec, ctx).then(function (r) {
-          existing[fieldText(rec[MF.name])] = { version: r.version, id: r.id };
+          existing[fieldText(rec[MF.name])] = { version: r.version, filename: r.filename, data: r.data };
           return r;
         });
       }
@@ -413,7 +429,8 @@
         if (ok && kind === 'plain') state.textContent = '雛形のまま使う書類（案件の情報は入れません）';
         else if (ex) {
           state.appendChild(document.createTextNode('最新 v' + ex.version + ' ・ '));
-          var a = el('a', '', '開く'); a.href = docUrl(docsAppId, ex.id); a.target = '_blank'; a.rel = 'noopener';
+          var a = el('a', 'cursor:pointer;text-decoration:underline;color:#1a73e8', '開く'); a.setAttribute('role', 'link');
+          a.addEventListener('click', function () { openStored(existing[name]).catch(function (e) { setMsg((e && e.message) || '開けませんでした', true); }); });
           state.appendChild(a);
         } else state.textContent = '未作成';
         left.appendChild(state);
@@ -423,7 +440,7 @@
         btn.addEventListener('click', function () {
           if (kind === 'plain') {
             btn.disabled = true; setMsg('雛形を取り出しています…', false);
-            openAsIs(rec).then(function (n) { btn.disabled = false; setMsg('雛形のまま保存しました：' + n + '（案件書類には保存していません）', false); })
+            openAsIs(rec).then(function (n) { btn.disabled = false; setMsg('雛形のまま保存しました：' + n + '（案件には保存していません）', false); })
               .catch(function (e) { btn.disabled = false; setMsg((e && e.message) || '取り出せませんでした', true); });
             return;
           }

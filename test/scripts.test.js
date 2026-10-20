@@ -26,7 +26,7 @@ async function withMock(fn) {
   try { await fn(mock, env); } finally { await mock.close(); }
 }
 
-test('create-apps：--yes なしは何も作らない／--yes で作成・初期データ19件・確認OK／2回目は止まる', async () => {
+test('create-apps：--yes なしは何も作らない／--yes で書類マスタを作成・初期データ19件・確認OK／2回目は止まる', async () => {
   await withMock(async (mock, env) => {
     let r = await run('create-apps.js', ['--space=7'], env);
     assert.strictEqual(r.code, 0, r.out);
@@ -37,7 +37,7 @@ test('create-apps：--yes なしは何も作らない／--yes で作成・初期
     assert.strictEqual(r.code, 0, r.out);
     assert.match(r.out, /OK 項目・件数・スペースとも想定どおり/);
     const apps = Object.values(mock.state.apps);
-    assert.deepStrictEqual(apps.map((a) => a.name).sort(), ['書類マスタ', '案件書類']);
+    assert.deepStrictEqual(apps.map((a) => a.name), ['書類マスタ'], '作るのは書類マスタだけ（案件書類アプリは作らない）');
     assert.ok(apps.every((a) => a.spaceId === '7'), 'スペース内に作る');
     const master = apps.find((a) => a.name === '書類マスタ');
     assert.strictEqual(mock.state.records[master.appId].length, 19);
@@ -111,7 +111,7 @@ test('backup → apply-customize：バックアップなしは実行しない／
   });
 });
 
-test('e2e-check：雛形→差し込み→案件書類に保存→中身確認→後始末', async () => {
+test('e2e-check：雛形→差し込み→案件くんの書類保管表に保存→中身確認→後始末', async () => {
   await withMock(async (mock, env) => {
     const tpl = await build();
     // 「段落をまたぐ {{ }}」を含まない、きれいな雛形（正常系用）
@@ -120,9 +120,8 @@ test('e2e-check：雛形→差し込み→案件書類に保存→中身確認�
     const cleanDocx = await z0.generateAsync({ type: 'nodebuffer' });
     // 案件くん（575）：項目名と項目コードが違う
     mock.addApp('575', '案件くん', { fields: { c_name: { type: 'SINGLE_LINE_TEXT', code: 'c_name', label: '案件名' }, c_addr: { type: 'SINGLE_LINE_TEXT', code: 'c_addr', label: '現場住所' }, c_client: { type: 'SINGLE_LINE_TEXT', code: 'c_client', label: '発注者' }, c_memo: { type: 'MULTI_LINE_TEXT', code: 'c_memo', label: '備考' } } });
-    mock.addRecord('575', { c_name: { type: 'SINGLE_LINE_TEXT', value: '東京Aビル 改修工事' }, c_addr: { type: 'SINGLE_LINE_TEXT', value: '東京都千代田区1-1' }, c_client: { type: 'SINGLE_LINE_TEXT', value: '株式会社<テスト>&サンプル' }, c_memo: { type: 'MULTI_LINE_TEXT', value: '1行目\n2行目' } });
+    mock.addRecord('575', { c_name: { type: 'SINGLE_LINE_TEXT', value: '東京Aビル 改修工事' }, c_addr: { type: 'SINGLE_LINE_TEXT', value: '東京都千代田区1-1' }, c_client: { type: 'SINGLE_LINE_TEXT', value: '株式会社<テスト>&サンプル' }, c_memo: { type: 'MULTI_LINE_TEXT', value: '1行目\n2行目' }, 書類保管: { type: 'SUBTABLE', value: [] } });
     mock.addApp('10', '書類マスタ');
-    mock.addApp('11', '案件書類');
     const key = mock.addFile(cleanDocx, '【テスト】雛形.docx');
     const badKey = mock.addFile(tpl.docx, '【テスト】雛形.docx');
     mock.addRecord('10', { 書類名: { value: '打合せ議事次第' }, 工程: { value: '打合せ・見積・提案' }, 使用状況: { value: '使用中' }, 雛形: { value: [{ fileKey: key, name: '【テスト】雛形.docx' }] } });
@@ -130,14 +129,15 @@ test('e2e-check：雛形→差し込み→案件書類に保存→中身確認�
     let r = await run('e2e-check.js', ['--record=1', '--doc=打合せ議事次第', '--cleanup'], env);
     assert.strictEqual(r.code, 0, r.out);
     assert.match(r.out, /案件名「東京Aビル 改修工事」が書類に入っています/);
-    assert.strictEqual(mock.state.records['11'].length, 0, '--cleanup で確認用レコードを消す');
+    assert.strictEqual(mock.state.records['575'][0]['書類保管'].value.length, 0, '--cleanup で確認用の行を取り除く');
 
     // --cleanup なしで2回：版が v1 → v2 になる
     await run('e2e-check.js', ['--record=1', '--doc=打合せ議事次第'], env);
     r = await run('e2e-check.js', ['--record=1', '--doc=打合せ議事次第'], env);
     assert.strictEqual(r.code, 0, r.out);
-    assert.deepStrictEqual(mock.state.records['11'].map((x) => x['版'].value), ['1', '2']);
-    const f = mock.state.records['11'][1]['添付ファイル'].value[0];
+    const rows = mock.state.records['575'][0]['書類保管'].value;
+    assert.deepStrictEqual(rows.map((x) => x.value['書類保管_版'].value), ['1', '2']);
+    const f = rows[1].value['書類保管_ファイル'].value[0];
     assert.strictEqual(f.name, '東京Aビル 改修工事_打合せ議事次第_v2.docx');
     const zip = await JSZip.loadAsync(mock.state.files[f.fileKey].buf);
     const xml = await zip.file('word/document.xml').async('string');
@@ -149,5 +149,41 @@ test('e2e-check：雛形→差し込み→案件書類に保存→中身確認�
     assert.strictEqual(r.code, 5, r.out);
     assert.match(r.out, /NG .*存在しない項目/);
     assert.match(r.out, /NG .*案件名\}\}/);
+  });
+});
+
+test('add-doc-storage：確認だけでは変えない／バックアップなしは止まる／足すと書類保管表ができ、既存は変わらない／2回目は止まる', async () => {
+  await withMock(async (mock, env) => {
+    mock.addApp('575', '案件くん', { fields: { c_name: { type: 'SINGLE_LINE_TEXT', code: 'c_name', label: '案件名' } } });
+    const backupDir = path.join(__dirname, '..', 'backup');
+    const had = fs.existsSync(backupDir) ? fs.readdirSync(backupDir) : [];
+    try {
+      let r = await run('add-doc-storage.js', [], env);
+      assert.strictEqual(r.code, 0, r.out);
+      assert.match(r.out, /確認だけです/);
+      assert.deepStrictEqual(Object.keys(mock.state.apps['575'].fields), ['c_name']);
+
+      if (!had.some((n) => n.startsWith('575_'))) {
+        r = await run('add-doc-storage.js', ['--yes'], env);
+        assert.strictEqual(r.code, 2, r.out);
+        assert.match(r.out, /バックアップがありません/);
+        assert.deepStrictEqual(Object.keys(mock.state.apps['575'].fields), ['c_name']);
+        r = await run('backup-app.js', ['575'], env);
+        assert.strictEqual(r.code, 0, r.out);
+      }
+      r = await run('add-doc-storage.js', ['--yes'], env);
+      assert.strictEqual(r.code, 0, r.out);
+      assert.match(r.out, /OK 「書類保管」表が追加されました/);
+      const f = mock.state.apps['575'].fields;
+      assert.deepStrictEqual(Object.keys(f), ['c_name', '書類保管'], '既存の項目は残り、表が1つ足される');
+      assert.strictEqual(f['書類保管'].type, 'SUBTABLE');
+      assert.deepStrictEqual(Object.keys(f['書類保管'].fields), ['書類保管_書類名', '書類保管_工程', '書類保管_版', '書類保管_作成日', '書類保管_ファイル']);
+
+      r = await run('add-doc-storage.js', ['--yes'], env);
+      assert.strictEqual(r.code, 2, r.out);
+      assert.match(r.out, /すでにあります/);
+    } finally {
+      fs.readdirSync(backupDir).filter((n) => !had.includes(n)).forEach((n) => fs.rmSync(path.join(backupDir, n), { recursive: true, force: true }));
+    }
   });
 });

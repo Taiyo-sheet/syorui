@@ -7,7 +7,7 @@ function createMock() {
   const spaces = { 7: { id: '7', name: 'TAIYOSHEET事業部', defaultThread: '70' } };
 
   function addApp(id, name, extra) { s.apps[id] = Object.assign({ appId: String(id), name, spaceId: null, fields: {}, previewFields: {}, customize: { scope: 'ALL', desktop: { js: [], css: [] }, mobile: { js: [], css: [] } } }, extra || {}); s.records[id] = []; s.nextRec[id] = 1; }
-  function addRecord(appId, rec) { const id = s.nextRec[appId]++; s.records[appId].push(Object.assign({ $id: { type: '__ID__', value: String(id) } }, rec)); return String(id); }
+  function addRecord(appId, rec) { const id = s.nextRec[appId]++; s.records[appId].push(Object.assign({ $id: { type: '__ID__', value: String(id) }, $revision: { type: '__REVISION__', value: '1' } }, rec)); return String(id); }
   function addFile(buf, name) { const key = 'fk' + s.nextFile++; s.files[key] = { buf, name }; return key; }
 
   // query: 「項目 = 値」「項目 in ("値")」を and でつないだものと order by / limit だけ解釈する
@@ -86,6 +86,28 @@ function createMock() {
         const rec = Object.assign({}, body.record);
         Object.keys(rec).forEach((c) => { if (Array.isArray(rec[c].value) && rec[c].value[0] && rec[c].value[0].fileKey) rec[c] = { value: rec[c].value.map((f) => ({ fileKey: f.fileKey, name: s.files[f.fileKey].name })) }; });
         return send(200, { id: addRecord(body.app, rec), revision: '1' });
+      }
+      if (req.method === 'PUT' && p === '/k/v1/record') {
+        const r = s.records[body.app].find((x) => x.$id.value === String(body.id));
+        if (!r) return send(404, { message: 'rec' });
+        if (body.revision !== undefined && String(body.revision) !== r.$revision.value) return send(409, { code: 'GAIA_CO02', message: 'revision' });
+        let nextRow = 1000;
+        Object.keys(body.record).forEach((c) => {
+          const v = body.record[c].value;
+          if (r[c] && r[c].type === 'SUBTABLE') {
+            r[c].value = v.map((row) => {
+              const cells = {};
+              Object.keys(row.value).forEach((fc) => {
+                let cv = row.value[fc].value;
+                if (Array.isArray(cv)) cv = cv.map((f) => ({ fileKey: f.fileKey, name: s.files[f.fileKey].name }));
+                cells[fc] = { value: cv };
+              });
+              return { id: row.id || String(nextRow++), value: cells };
+            });
+          } else r[c] = Object.assign({}, r[c], { value: v });
+        });
+        r.$revision.value = String(Number(r.$revision.value) + 1);
+        return send(200, { revision: r.$revision.value });
       }
       if (req.method === 'GET' && p === '/k/v1/records') {
         const recs = runQuery(q.app, q.query);

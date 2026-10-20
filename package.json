@@ -8,6 +8,7 @@
     "test": "node --test test/*.test.js",
     "create-apps": "node scripts/create-apps.js",
     "backup": "node scripts/backup-app.js",
+    "add-doc-storage": "node scripts/add-doc-storage.js",
     "apply-customize": "node scripts/apply-customize.js",
     "make-test-templates": "node scripts/make-test-templates.js",
     "e2e": "node scripts/e2e-check.js"
