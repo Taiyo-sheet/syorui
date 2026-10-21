@@ -467,3 +467,36 @@ test('画面：案件管理アプリを開くボタン（PC用）は、右下の
     await ctx.close();
   } finally { await browser.close(); await mock.close(); }
 });
+
+test('画面：round-buttons.js は、元のボタンを丸くする（押したときの動き・リンク先・色は元のまま）。あとから出るボタンも丸くする', { skip }, async () => {
+  const mock = createMock(); const url = await mock.listen();
+  const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
+  try {
+    const ctx = await browser.newContext({ viewport: { width: 900, height: 600 } }); const page = await ctx.newPage();
+    const errors = []; page.on('pageerror', (e) => errors.push(e.message));
+    await page.addInitScript(() => { window.__clicks = []; });
+    await page.goto(url + '/__page');
+    await page.evaluate(() => new Promise((r) => { const s = document.createElement('script'); s.src = '/__lib/round-buttons.js'; s.onload = r; document.head.appendChild(s); }));
+    // 元のJSが、あとから出すボタン（見積くん＝ボタン、発注くん＝リンク）
+    await page.evaluate(() => {
+      const b = document.createElement('button'); b.id = 'open-mitsumori-btn'; b.type = 'button'; b.textContent = '🧮 見積作成システムを開く';
+      b.style.cssText = 'position:fixed;right:20px;bottom:20px;padding:11px 18px;background:rgb(27,52,98);color:#fff;border:none;border-radius:8px;font-weight:700;font-size:14px;';
+      b.onclick = () => window.__clicks.push('mitsumori'); document.body.appendChild(b);
+      const a = document.createElement('a'); a.id = 'ts-hassou-admin-btn'; a.href = 'https://example.com/admin?key=SECRET'; a.target = '_blank'; a.textContent = '📦 発注書を業者へ送付を開く';
+      a.style.cssText = 'position:fixed;right:16px;bottom:16px;padding:12px 18px;background:rgb(22,53,122);color:#fff;border-radius:24px;font-size:14px;font-weight:700;text-decoration:none;'; document.body.appendChild(a);
+    });
+    const m = page.locator('#open-mitsumori-btn'), h = page.locator('#ts-hassou-admin-btn');
+    await page.waitForFunction(() => document.getElementById('open-mitsumori-btn').getAttribute('data-round') === '1');
+    for (const l of [m, h]) { const b = await l.boundingBox(); assert.ok(b.width < 70 && Math.abs(b.width - b.height) < 20, '丸い小さなボタン：' + b.width); assert.ok(b.x + b.width > 860, '右下'); }
+    await h.evaluate((e) => e.style.setProperty('bottom', '120px', 'important'));   // 実際は1アプリに1つ。このテストでは、重ならないようにずらす
+    assert.strictEqual(await m.evaluate((e) => getComputedStyle(e).backgroundColor), 'rgb(27, 52, 98)', '色は元のまま');
+    assert.strictEqual(await h.getAttribute('href'), 'https://example.com/admin?key=SECRET', 'リンク先・鍵は元のまま');
+    await m.hover();
+    await page.waitForFunction(() => document.getElementById('open-mitsumori-btn').getBoundingClientRect().width > 150);
+    assert.match(await m.textContent(), /見積作成システムを開く/);
+    await m.click();
+    assert.deepStrictEqual(await page.evaluate(() => window.__clicks), ['mitsumori'], '押したときの動きは元のまま');
+    assert.deepStrictEqual(errors, []);
+    await ctx.close();
+  } finally { await browser.close(); await mock.close(); }
+});
