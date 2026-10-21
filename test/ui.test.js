@@ -320,3 +320,65 @@ test('画面：「書類関係」タブの中のスペースがあれば、ボ�
     await ctx.close();
   } finally { await browser.close(); await mock.close(); }
 });
+
+test('画面：全工程をまとめて作成（未作成だけ）／2回目は「すべて作成済み」', { skip }, async () => {
+  const mock = createMock(); const url = await mock.listen();
+  const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
+  try {
+    await seed(mock);
+    const { page, errors } = await openPage(browser, url, '/__page');
+    await page.locator('[data-doc-hub]').click();
+    await page.getByText('工程別の書類：').waitFor();
+    await page.getByRole('button', { name: '全工程をまとめて作成' }).click();
+    await page.getByText(/2件を保存しました/).waitFor();
+    assert.deepStrictEqual(stored(mock).map((r) => r.name).sort(), ['現状確認シート', '打合せ議事次第'].sort(), '雛形のある書類だけ（標準の手引き・雛形なしは作らない）');
+    await page.getByRole('button', { name: '全工程をまとめて作成' }).click();
+    await page.getByText(/すべて作成済みか、雛形のまま使うもの/).waitFor();
+    assert.strictEqual(stored(mock).length, 2, '2回目は作らない（版が増えない）');
+    assert.deepStrictEqual(errors, []);
+  } finally { await browser.close(); await mock.close(); }
+});
+
+test('画面：直したファイルを、次の版として登録できる', { skip }, async () => {
+  const mock = createMock(); const url = await mock.listen();
+  const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
+  try {
+    await seed(mock);
+    const tpl = await build();
+    const { page, errors } = await openPage(browser, url, '/__page');
+    await page.locator('[data-doc-hub]').click();
+    await page.getByText('工程別の書類：').waitFor();
+    await page.locator('select').nth(0).selectOption('打合せ・見積・提案');
+    await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: '作成して保存' }).click()]);
+    await page.getByText(/_v1\.docx/).waitFor();
+    await page.reload(); await page.evaluate((r) => window.__fire(r), RECORD);
+    await page.locator('[data-doc-hub]').click();
+    await page.locator('select').nth(0).selectOption('打合せ・見積・提案');
+    await page.getByText('最新 v1').waitFor();
+    await page.locator('input[data-revision="打合せ議事次第"]').setInputFiles({ name: '直した議事次第.docx', mimeType: 'application/octet-stream', buffer: tpl.docx });
+    await page.getByText(/v2 として登録しました：東京Aビル 改修工事_打合せ議事次第_v2\.docx/).waitFor();
+    const rows = stored(mock);
+    assert.deepStrictEqual(rows.map((r) => r.version), ['1', '2'], 'v1 は残り、v2 が足される');
+    assert.ok(mock.state.files[rows[1].file.fileKey].buf.equals(tpl.docx), '直したファイルの中身が、そのまま保存される');
+    await page.getByText('最新 v2').waitFor();
+    assert.deepStrictEqual(errors, []);
+  } finally { await browser.close(); await mock.close(); }
+});
+
+test('画面：案件くんの値が空のまま入る項目を、作成後に知らせる（自動では画面を更新しない）', { skip }, async () => {
+  const mock = createMock(); const url = await mock.listen();
+  const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
+  try {
+    await seed(mock);
+    const blank = Object.assign({}, RECORD, { c_addr: { type: 'SINGLE_LINE_TEXT', value: '' } });
+    const { page, errors } = await openPage(browser, url, '/__page', blank);
+    await page.locator('[data-doc-hub]').click();
+    await page.getByText('工程別の書類：').waitFor();
+    await page.locator('select').nth(0).selectOption('打合せ・見積・提案');
+    await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: '作成して保存' }).click()]);
+    await page.getByText(/案件くんの値が空のまま入った項目.*\{\{現場住所\}\}/).waitFor();
+    await page.getByText('保存はできています').waitFor();
+    assert.strictEqual(stored(mock).length, 1, '保存はされている');
+    assert.deepStrictEqual(errors, []);
+  } finally { await browser.close(); await mock.close(); }
+});

@@ -84,10 +84,11 @@
     return m ? m[0] : '';
   }
   // 戻り値：置き換えた XML。unknown に「値が見つからなかった {{名前}}」を集める
-  function replacePlaceholders(xml, values, kind, unknown) {
+  function replacePlaceholders(xml, values, kind, unknown, empty) {
     return xml.replace(PH, function (whole, inner, offset, str) {
       var label = decodeLabel(inner.replace(/<[^>]*>/g, ''));
       if (Object.prototype.hasOwnProperty.call(values, label)) {
+        if (empty && String(values[label]).trim() === '' && empty.indexOf(label) < 0) empty.push(label);
         return toXmlText(values[label], kind, kind === 'pptx' ? lastRunProps(str, offset) : '');
       }
       if (unknown && unknown.indexOf(label) < 0) unknown.push(label);
@@ -105,14 +106,14 @@
     });
   }
   function fillTemplate(JSZipLib, buf, ext, values) {
-    var unknown = [];
-    if (!OFFICE[ext]) return Promise.resolve({ data: buf, unknown: unknown });
+    var unknown = [], empty = [];
+    if (!OFFICE[ext]) return Promise.resolve({ data: buf, unknown: unknown, empty: empty });
     return JSZipLib.loadAsync(buf).then(function (zip) {
       var names = Object.keys(zip.files).filter(function (n) { return TARGET.test(n); });
       return Promise.all(names.map(function (n) {
         return zip.file(n).async('string').then(function (x) {
           if (n === 'xl/sharedStrings.xml') x = dropPhonetic(x);
-          var y = replacePlaceholders(x, values, ext, unknown);
+          var y = replacePlaceholders(x, values, ext, unknown, empty);
           // 名前が違うものに加えて、{{ }} が段落やセルをまたいでいて置き換えられなかったものも拾う
           (y.replace(/<[^>]*>/g, '').match(/\{\{[^{}]*\}\}/g) || []).forEach(function (t) {
             var l = decodeLabel(t.slice(2, -2));
@@ -121,7 +122,7 @@
           zip.file(n, y);
         });
       })).then(function () { return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' }); })
-        .then(function (data) { return { data: data, unknown: unknown }; });
+        .then(function (data) { return { data: data, unknown: unknown, empty: empty }; });
     });
   }
   // 雛形に {{ }} が1つでもあるか。なければ「案件の情報は入れず、雛形のまま使う書類」として扱う
@@ -290,6 +291,27 @@
     return download(ex.file.fileKey).then(function (buf) { saveAs(buf, ex.file.name); return ex.file.name; });
   }
 
+  // 書類1通を、案件の「書類保管」表に、1行足して保存する（作成も、修正版の登録も、ここを通る）
+  function storeRow(record, ctx, docName, stage, version, filename, data) {
+    return upload(data, filename).then(function (fileKey) {
+      var row = { value: {} };
+      row.value[SUB.name] = { value: docName };
+      row.value[SUB.stage] = { value: stage };
+      row.value[SUB.version] = { value: String(version) };
+      row.value[SUB.at] = { value: isoToday() };
+      row.value[SUB.file] = { value: [{ fileKey: fileKey }] };
+      var update = {};
+      update[SUB.table] = { value: rowsOf(record).map(keepRow).concat([row]) };
+      // revision を付けて更新する：読んだあとに別の人が案件を更新していたら、上書きせずに失敗する
+      return api('PUT', '/k/v1/record', { app: appApi.getId(), id: ctx.projectId, revision: record.$revision.value, record: update }).then(function () {
+        return { filename: filename, version: version, data: data };
+      }, function (e) {
+        if (e && e.code === 'GAIA_CO02') throw new Error('別の人が同時に、この案件を更新しました。もう一度押してください');
+        throw e;
+      });
+    });
+  }
+
   function createDoc(masterRec, ctx) {
     var docName = fieldText(masterRec[MF.name]);
     var files = masterRec[MF.template].value;
@@ -304,24 +326,31 @@
       var values = Object.assign({}, ctx.values, { '版': 'v' + version, '書類名': docName });
       return fillTemplate(JSZip, res[1], ext, values).then(function (out) {
         var filename = buildFilename(ctx.projectName, docName, version, ext);
-        return upload(out.data, filename).then(function (fileKey) {
-          var row = { value: {} };
-          row.value[SUB.name] = { value: docName };
-          row.value[SUB.stage] = { value: fieldText(masterRec[MF.stage]) };
-          row.value[SUB.version] = { value: String(version) };
-          row.value[SUB.at] = { value: isoToday() };
-          row.value[SUB.file] = { value: [{ fileKey: fileKey }] };
-          var update = {};
-          update[SUB.table] = { value: rowsOf(record).map(keepRow).concat([row]) };
-          // revision を付けて更新する：読んだあとに別の人が案件を更新していたら、上書きせずに失敗する
-          return api('PUT', '/k/v1/record', { app: appApi.getId(), id: ctx.projectId, revision: record.$revision.value, record: update }).then(function () {
-            return { filename: filename, version: version, unknown: out.unknown, data: out.data };
-          }, function (e) {
-            if (e && e.code === 'GAIA_CO02') throw new Error('別の人が同時に、この案件を更新しました。もう一度押してください');
-            throw e;
-          });
+        return storeRow(record, ctx, docName, fieldText(masterRec[MF.stage]), version, filename, out.data).then(function (r) {
+          r.unknown = out.unknown; r.empty = out.empty;
+          return r;
         });
       });
+    });
+  }
+
+  // 修正したファイルを、次の版（v2, v3…）として登録する（担当者が書類を開いて直し、その直したファイルを戻す）
+  function registerRevision(masterRec, file, ctx) {
+    var docName = fieldText(masterRec[MF.name]);
+    var ext = extOf(file.name);
+    if (!ext) return Promise.reject(new Error('ファイルの種類（.docx など）が分かりません'));
+    return Promise.all([projectRecord(ctx.projectId), readFile(file)]).then(function (res) {
+      var record = res[0], cur = existingOf(record)[docName];
+      var version = (cur ? cur.version : 0) + 1;
+      return storeRow(record, ctx, docName, fieldText(masterRec[MF.stage]), version, buildFilename(ctx.projectName, docName, version, ext), res[1]);
+    });
+  }
+  function readFile(file) {
+    return new Promise(function (resolve, reject) {
+      var fr = new FileReader();
+      fr.onload = function () { resolve(fr.result); };
+      fr.onerror = function () { reject(new Error('ファイルを読み込めませんでした')); };
+      fr.readAsArrayBuffer(file);
     });
   }
 
@@ -350,7 +379,13 @@
   function targetOf(r) { var t = r[MF.target] ? fieldText(r[MF.target]) : ''; return t === '共通' ? '' : t; }
   function matchTarget(r, sel) { var t = targetOf(r); return !t || !sel || t === sel; }
   function hasTemplate(r) { return !!(r[MF.template] && r[MF.template].value && r[MF.template].value.length); }
-  function unknownNote(list) { return list && list.length ? '\n置き換えできずに残った項目（名前が違う、または {{ }} が段落・セルをまたいでいます）：' + list.map(function (n) { return '{{' + n + '}}'; }).join(' ') : ''; }
+  function unknownNote(list, empty) {
+    var t = '';
+    if (list && list.length) t += '\n置き換えできずに残った項目（名前が違う、または {{ }} が段落・セルをまたいでいます）：' + list.map(function (n) { return '{{' + n + '}}'; }).join(' ');
+    // 書類のチェック（外部には送らず、この画面の中だけで行う）：案件くんの値が空のまま入った項目
+    if (empty && empty.length) t += '\n案件くんの値が空のまま入った項目（案件くんに入力してから、作り直してください）：' + empty.map(function (n) { return '{{' + n + '}}'; }).join(' ');
+    return t;
+  }
 
   function openPanel(ctx) {
     var overlay = el('div', 'position:fixed;left:0;top:0;right:0;bottom:0;background:rgba(0,0,0,.45);z-index:10000;overflow:auto;-webkit-overflow-scrolling:touch');
@@ -390,7 +425,8 @@
       else if (targets.indexOf(ctx.guessedTarget) >= 0) { tgtSel.value = ctx.guessedTarget; autoNote = '対象は、案件名から「' + ctx.guessedTarget + '」と判断して選びました。違うときは選び直してください。'; }
       var bar = el('div'); bar.appendChild(stageSel); if (auds.length) bar.appendChild(audSel); if (targets.length) bar.appendChild(tgtSel);
       var batch = el('button', 'padding:6px 12px;font-size:13px;cursor:pointer;margin-bottom:8px', 'この工程をまとめて作成'); batch.type = 'button';
-      bar.appendChild(batch);
+      var batchAll = el('button', 'padding:6px 12px;font-size:13px;cursor:pointer;margin-bottom:8px;margin-left:8px', '全工程をまとめて作成'); batchAll.type = 'button';
+      bar.appendChild(batch); bar.appendChild(batchAll);
       var list = el('div'), msg = el('div', 'margin-top:8px;font-size:13px;white-space:pre-line');
       if (autoNote && targets.length) bar.appendChild(el('div', 'font-size:12px;color:#666;margin-bottom:6px', autoNote));
       body.appendChild(bar); body.appendChild(list); body.appendChild(msg);
@@ -407,7 +443,11 @@
         });
       }
       function setMsg(t, err) { msg.textContent = t; msg.style.color = err ? '#c0392b' : '#1f7a3d'; }
-      function reloadSoon(t) { setMsg(t + '（画面を更新します）', false); setTimeout(function () { location.reload(); }, 2500); }
+      // 注意（置き換えできなかった項目・空の項目）があるときは、読めるように、画面を自動では更新しない
+      function reloadSoon(t, stay) {
+        if (stay) { setMsg(t + '\n（保存はできています。内容を確認してください。案件の「書類保管」表は、画面を開き直すと更新されます）', true); batch.disabled = false; batchAll.disabled = false; updateStageLabels(); show(); return; }
+        setMsg(t + '（画面を更新します）', false); setTimeout(function () { location.reload(); }, 2500);
+      }
       function shown() {
         return masters.filter(function (r) {
           if (fieldText(r[MF.stage]) !== stageSel.value) return false;
@@ -450,10 +490,28 @@
           var cur = existing[name];
           if (cur && !confirm('「' + name + '」は v' + cur.version + ' まで作成済みです。v' + (cur.version + 1) + ' を作成しますか？')) return;
           btn.disabled = true; setMsg('作成しています…', false);
-          makeOne(rec).then(function (r) { saveAs(r.data, r.filename); reloadSoon('保存してダウンロードしました：' + r.filename + unknownNote(r.unknown)); })
+          makeOne(rec).then(function (r) { saveAs(r.data, r.filename); reloadSoon('保存してダウンロードしました：' + r.filename + unknownNote(r.unknown, r.empty), !!((r.unknown && r.unknown.length) || (r.empty && r.empty.length))); })
             .catch(function (e) { btn.disabled = false; setMsg((e && e.message) || '作成できませんでした', true); });
         });
-        row.appendChild(left); row.appendChild(btn);
+        var right = el('div', 'display:flex;flex-direction:column;gap:6px;align-items:stretch');
+        right.appendChild(btn);
+        // 直したファイルを、次の版として登録する（作成済みの書類だけ）
+        if (ex && ok && kind !== 'plain') {
+          var pick = document.createElement('input'); pick.type = 'file'; pick.style.display = 'none'; pick.setAttribute('data-revision', name);
+          var rev = el('button', 'padding:6px 10px;font-size:12px;cursor:pointer', '直したファイルを登録'); rev.type = 'button';
+          rev.addEventListener('click', function () { pick.click(); });
+          pick.addEventListener('change', function () {
+            var f = pick.files && pick.files[0]; if (!f) return;
+            if (!confirm('「' + f.name + '」を、「' + name + '」の v' + (ex.version + 1) + ' として登録しますか？')) { pick.value = ''; return; }
+            rev.disabled = true; setMsg('登録しています…', false);
+            registerRevision(rec, f, ctx).then(function (r) {
+              existing[name] = { version: r.version, filename: r.filename, data: r.data };
+              setMsg('v' + r.version + ' として登録しました：' + r.filename, false); updateStageLabels(); show();
+            }).catch(function (e) { rev.disabled = false; setMsg((e && e.message) || '登録できませんでした', true); });
+          });
+          right.appendChild(rev); right.appendChild(pick);
+        }
+        row.appendChild(left); row.appendChild(right);
         return row;
       }
       function show() {
@@ -467,32 +525,42 @@
           if (hasTemplate(rec) && !kindOf(rec)) inspect(rec).then(function () { if (row.parentNode === list) list.replaceChild(makeRow(rec), row); });
         });
       }
-      batch.addEventListener('click', function () {
-        var withTpl = shown().filter(hasTemplate);
+      // まとめて作成：pick() が返す書類のうち、雛形のあるものを作る。onlyMissing なら、未作成のものだけ（全工程のとき）
+      function runBatch(btn, pick, onlyMissing, scope) {
+        var withTpl = pick().filter(hasTemplate);
         if (!withTpl.length) { setMsg('雛形が登録された書類がありません', true); return; }
-        batch.disabled = true; setMsg('雛形を確認しています…', false);
+        btn.disabled = true; setMsg('雛形を確認しています…', false);
         Promise.all(withTpl.map(inspect)).then(function () {
-          var targets = withTpl.filter(function (r) { return kindOf(r) !== 'plain'; });
-          var asIs = withTpl.length - targets.length;
-          batch.disabled = false; setMsg('', false);
-          if (!targets.length) { setMsg('この工程の書類は、すべて雛形のまま使うものです（各行の「雛形を開く」で取り出せます）', false); return; }
-          if (!confirm(targets.length + '件の書類を作成します。作成済みの書類は次の版として作られます。' + (asIs ? '\n（雛形のまま使う ' + asIs + '件は、作成の対象外です）' : '') + '\nよろしいですか？')) return;
-          batch.disabled = true;
-          var done = [], failed = [], unknown = [];
+          var targets = withTpl.filter(function (r) { return kindOf(r) !== 'plain' && (!onlyMissing || !existing[fieldText(r[MF.name])]); });
+          var asIs = withTpl.filter(function (r) { return kindOf(r) === 'plain'; }).length;
+          btn.disabled = false; setMsg('', false);
+          if (!targets.length) { setMsg(onlyMissing ? scope + 'の書類は、すべて作成済みか、雛形のまま使うものです' : scope + 'の書類は、すべて雛形のまま使うものです（各行の「雛形を開く」で取り出せます）', false); return; }
+          if (!confirm(targets.length + '件の書類を作成します。' + (onlyMissing ? '（作成済みの書類は、作りません）' : '作成済みの書類は次の版として作られます。') + (asIs ? '\n（雛形のまま使う ' + asIs + '件は、作成の対象外です）' : '') + '\nよろしいですか？')) return;
+          btn.disabled = true;
+          var done = [], failed = [], unknown = [], empty = [];
           targets.reduce(function (p, rec) {
             return p.then(function () {
               setMsg('作成中…（' + (done.length + failed.length + 1) + '/' + targets.length + '）', false);
               return makeOne(rec).then(function (r) {
                 done.push(r.filename);
                 (r.unknown || []).forEach(function (n) { if (unknown.indexOf(n) < 0) unknown.push(n); });
+                (r.empty || []).forEach(function (n) { if (empty.indexOf(n) < 0) empty.push(n); });
               }, function (e) { failed.push(fieldText(rec[MF.name]) + '：' + ((e && e.message) || '失敗')); });
             });
           }, Promise.resolve()).then(function () {
             updateStageLabels();
-            if (failed.length) { batch.disabled = false; show(); setMsg('作成 ' + done.length + '件、失敗 ' + failed.length + '件\n' + failed.join('\n') + unknownNote(unknown), true); }
-            else reloadSoon(done.length + '件を保存しました' + unknownNote(unknown));
+            if (failed.length) { btn.disabled = false; show(); setMsg('作成 ' + done.length + '件、失敗 ' + failed.length + '件\n' + failed.join('\n') + unknownNote(unknown, empty), true); }
+            else reloadSoon(done.length + '件を保存しました' + unknownNote(unknown, empty), !!(unknown.length || empty.length));
           });
         });
+      }
+      batch.addEventListener('click', function () { runBatch(batch, shown, false, 'この工程'); });
+      batchAll.addEventListener('click', function () {
+        runBatch(batchAll, function () {
+          return masters.filter(function (r) {
+            return (!audSel.value || ((r[MF.audience] && r[MF.audience].value) || []).indexOf(audSel.value) >= 0) && matchTarget(r, tgtSel.value);
+          });
+        }, true, '全工程');
       });
       stageSel.addEventListener('change', show);
       tgtSel.addEventListener('change', function () { updateStageLabels(); show(); });
