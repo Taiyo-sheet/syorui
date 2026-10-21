@@ -58,7 +58,9 @@ function createMock() {
       if (req.method === 'GET' && p === '/k/v1/preview/app/deploy') return send(200, { apps: q['apps[0]'] ? [{ app: q['apps[0]'], status: 'SUCCESS' }] : [] });
       if (req.method === 'GET' && p === '/k/v1/app/form/fields') return send(200, { properties: appOf(q.app).fields, revision: '1' });
       if (req.method === 'GET' && p === '/k/v1/preview/app/form/fields') return send(200, { properties: appOf(q.app).previewFields, revision: '1' });
-      if (req.method === 'GET' && /^\/k\/v1\/(preview\/)?app\/(form\/layout|views|settings|status)$/.test(p)) return send(200, { layout: [], views: {}, revision: '1' });
+      if (req.method === 'GET' && /^\/k\/v1\/(preview\/)?app\/form\/layout$/.test(p)) { const a = appOf(q.app); return send(200, { layout: a.layout || [], revision: String(a.layoutRev || 1) }); }
+      if (req.method === 'PUT' && p === '/k/v1/preview/app/form/layout') { const a = appOf(body.app); a.layout = body.layout; a.layoutRev = (a.layoutRev || 1) + 1; return send(200, { revision: String(a.layoutRev) }); }
+      if (req.method === 'GET' && /^\/k\/v1\/(preview\/)?app\/(views|settings|status)$/.test(p)) return send(200, { layout: [], views: {}, revision: '1' });
       if (req.method === 'GET' && /^\/k\/v1\/(preview\/)?app\/customize$/.test(p)) return send(200, Object.assign({ revision: '1' }, appOf(q.app).customize));
       if (req.method === 'PUT' && p === '/k/v1/preview/app/customize') {
         const a = appOf(body.app);

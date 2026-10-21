@@ -31,7 +31,7 @@ const FAKE_KINTONE = `
   api.url = function (p) { return p + '.json'; };
   var handlers = [];
   var header = function () { return document.getElementById('hdr'); };
-  var rec = function () { return { getId: function () { return 1; }, getHeaderMenuSpaceElement: header }; };
+  var rec = function () { return { getId: function () { return 1; }, getHeaderMenuSpaceElement: header, getSpaceElement: function (id) { return id === 'doc_button_space' ? document.getElementById('tabspace') : null; } }; };
   window.kintone = {
     api: api,
     getRequestToken: function () { return 'tok'; },
@@ -300,5 +300,23 @@ test('画面：案件名に「橋」があれば、対象は自動で「橋梁�
     assert.strictEqual(await page.getByText('仕様書（橋梁）', { exact: true }).count(), 0);
     assert.strictEqual(await page.getByText('仕様書（一般道路）', { exact: true }).count(), 1);
     assert.deepStrictEqual(errors, []);
+  } finally { await browser.close(); await mock.close(); }
+});
+
+test('画面：「書類関係」タブの中のスペースがあれば、ボタンはそこに出る（なければヘッダーに出る）', { skip }, async () => {
+  const mock = createMock(); const url = await mock.listen();
+  const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
+  try {
+    await seed(mock);
+    const ctx = await browser.newContext(); const page = await ctx.newPage();
+    const errors = []; page.on('pageerror', (e) => errors.push(e.message));
+    await page.addInitScript(FAKE_KINTONE);
+    await page.goto(url + '/__page');
+    await page.evaluate(() => { var d = document.createElement('div'); d.id = 'tabspace'; document.body.appendChild(d); });
+    await page.evaluate((r) => window.__fire(r), RECORD);
+    assert.strictEqual(await page.locator('#tabspace [data-doc-hub]').count(), 1, 'タブの中のスペースに出る');
+    assert.strictEqual(await page.locator('#hdr [data-doc-hub]').count(), 0, 'ヘッダーには出さない');
+    assert.deepStrictEqual(errors, []);
+    await ctx.close();
   } finally { await browser.close(); await mock.close(); }
 });

@@ -31,6 +31,9 @@
   // 案件くんの項目のうち、「橋梁」「一般道路」など、書類マスタの「対象」と同じ言葉が入っているもの。
   // その項目名を入れると、案件を開いたときに、対象が自動で選ばれる（空のままなら、画面で手で選ぶ）
   var TARGET_LABEL = '';
+  // ボタンを置く場所：案件くんの「書類関係」タブの中に置いた「スペース」項目の要素ID（scripts/add-button-space.js で足す）。
+  // これがあれば、そのタブを開いたときだけボタンが見える。なければ、画面上部のヘッダーに出す
+  var BUTTON_SPACE_ID = 'doc_button_space';
   var STAGE_LABEL = '現在の工程';                      // 案件くんにこの項目があれば、その工程を最初に表示
 
   // ---------- 値の整形 ----------
@@ -158,7 +161,7 @@
   // Node（テスト）から使うときは、ここまでの部品だけを渡して終わる
   if (typeof kintone === 'undefined') {
     if (typeof module !== 'undefined' && module.exports) {
-      module.exports = { fieldText: fieldText, replacePlaceholders: replacePlaceholders, fillTemplate: fillTemplate, hasPlaceholders: hasPlaceholders, guessTarget: guessTarget, buildFilename: buildFilename, buildValues: buildValues, quote: quote, SUB: SUB, MF: MF, today: today };
+      module.exports = { BUTTON_SPACE_ID: BUTTON_SPACE_ID, fieldText: fieldText, replacePlaceholders: replacePlaceholders, fillTemplate: fillTemplate, hasPlaceholders: hasPlaceholders, guessTarget: guessTarget, buildFilename: buildFilename, buildValues: buildValues, quote: quote, SUB: SUB, MF: MF, today: today };
     }
     return;
   }
@@ -503,7 +506,9 @@
 
   function onShow(event) {
     if (typeof JSZip === 'undefined') { console.error('JSZipが読み込まれていません。JavaScriptの読み込み順を確認してください。'); return event; }
-    var host = isMobile ? kintone.mobile.app.getHeaderSpaceElement() : kintone.app.record.getHeaderMenuSpaceElement();
+    var host = null;
+    try { host = recApi.getSpaceElement(BUTTON_SPACE_ID); } catch (e) { host = null; }
+    if (!host) host = isMobile ? kintone.mobile.app.getHeaderSpaceElement() : kintone.app.record.getHeaderMenuSpaceElement();
     if (!host || host.querySelector('[data-doc-hub]')) return event;
     var record = event.record, projectId = recApi.getId();
     var btn = el('button', 'padding:8px 14px;font-size:14px;font-weight:bold;cursor:pointer;margin:4px 8px', '書類を作る');
