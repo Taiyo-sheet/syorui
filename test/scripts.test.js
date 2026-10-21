@@ -100,7 +100,7 @@ test('backup → apply-customize：バックアップなしは実行しない／
     assert.strictEqual(r.code, 0, r.out);
     const c = mock.state.apps['575'].customize;
     const names = (list) => list.map((x) => x.type === 'URL' ? x.url : x.file.name);
-    assert.deepStrictEqual(names(c.desktop.js), ['https://example.com/a.js', 'existing.js', 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js', 'doc-button.js']);
+    assert.deepStrictEqual(names(c.desktop.js), ['https://example.com/a.js', 'existing.js', 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js', 'doc-button.js', 'taiyo-open-app.js']);
     assert.deepStrictEqual(names(c.mobile.js), ['https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js', 'doc-button.js']);
     assert.deepStrictEqual(names(c.desktop.css), ['https://example.com/a.css'], '既存のCSSは残る');
 

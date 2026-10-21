@@ -441,3 +441,29 @@ test('画面：議事録（{{打合せ日}} {{議事録メモ}} のある雛形�
     assert.deepStrictEqual(errors, []);
   } finally { await browser.close(); await mock.close(); }
 });
+
+test('画面：案件管理アプリを開くボタン（PC用）は、右下の丸いボタン。近づけると広がり、押すと別タブでURLを開く', { skip }, async () => {
+  const mock = createMock(); const url = await mock.listen();
+  const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
+  try {
+    const ctx = await browser.newContext(); const page = await ctx.newPage();
+    const errors = []; page.on('pageerror', (e) => errors.push(e.message));
+    await page.addInitScript(FAKE_KINTONE);
+    await page.addInitScript(() => { window.__opened = []; window.open = function (u) { window.__opened.push(u); return null; }; });
+    await page.goto(url + '/__page');
+    await page.evaluate(() => { var s = document.createElement('script'); s.src = '/__lib/taiyo-open-app.js'; document.head.appendChild(s); return new Promise((r) => { s.onload = r; }); });
+    await page.evaluate((r) => window.__fire(r), RECORD);
+    await page.evaluate((r) => window.__fire(r), RECORD);   // 2回開いても、ボタンは1つ
+    const btn = page.locator('#taiyo-open-app-btn');
+    assert.strictEqual(await btn.count(), 1);
+    const box = await btn.boundingBox();
+    assert.ok(box.width < 70, '最初は丸い小さなボタン：' + box.width);
+    await btn.hover();
+    await page.waitForFunction(() => document.getElementById('taiyo-open-app-btn').getBoundingClientRect().width > 150);
+    assert.match(await btn.textContent(), /案件管理アプリを開く/);
+    await btn.click();
+    assert.deepStrictEqual(await page.evaluate(() => window.__opened), ['https://anken-kanri-1.onrender.com/']);
+    assert.deepStrictEqual(errors, []);
+    await ctx.close();
+  } finally { await browser.close(); await mock.close(); }
+});

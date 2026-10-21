@@ -3,7 +3,8 @@
   "desktop": {
     "js": [
       "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js",
-      "customize/doc-button.js"
+      "customize/doc-button.js",
+      "customize/taiyo-open-app.js"
     ]
   },
   "mobile": {

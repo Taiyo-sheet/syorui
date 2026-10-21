@@ -38,6 +38,7 @@ function createMock() {
     const fs = require('fs'), path = require('path');
     if (req.method === 'GET' && (p === '/__page' || p === '/k/m/__page')) { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); return res.end('<!doctype html><meta charset="utf-8"><div id="hdr"></div><script src="/__lib/jszip.min.js"></script><script src="/__lib/doc-button.js"></script>'); }
     if (req.method === 'GET' && p === '/__lib/jszip.min.js') { res.writeHead(200, { 'Content-Type': 'text/javascript' }); return res.end(fs.readFileSync(path.join(__dirname, '..', 'node_modules', 'jszip', 'dist', 'jszip.min.js'))); }
+    if (req.method === 'GET' && p === '/__lib/taiyo-open-app.js') { res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }); return res.end(fs.readFileSync(path.join(__dirname, '..', 'customize', 'taiyo-open-app.js'))); }
     if (req.method === 'GET' && p === '/__lib/doc-button.js') { res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }); return res.end(fs.readFileSync(path.join(__dirname, '..', 'customize', 'doc-button.js'))); }
     if (!req.headers['x-cybozu-authorization'] && !req.headers['x-requested-with'] && !req.headers['content-type']) return send(401, { code: 'CB_AU01', message: 'no auth' });
     if (!req.headers['x-cybozu-authorization'] && !req.headers['x-requested-with'] && !(req.headers['content-type'] || '').includes('json')) return send(401, { code: 'CB_AU01', message: 'no auth' });
