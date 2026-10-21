@@ -382,3 +382,36 @@ test('画面：案件くんの値が空のまま入る項目を、作成後に�
     assert.deepStrictEqual(errors, []);
   } finally { await browser.close(); await mock.close(); }
 });
+
+test('画面：議事録（{{打合せ日}} {{議事録メモ}} のある雛形）は、入力欄が出て、箇条書きが整って入る', { skip }, async () => {
+  const mock = createMock(); const url = await mock.listen();
+  const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
+  try {
+    await seed(mock);
+    const tpl = await build();
+    const z = await JSZip.loadAsync(tpl.docx);
+    z.file('word/document.xml', '<w:document xmlns:w="x"><w:body><w:p><w:r><w:t>議事録 {{案件名}}</w:t></w:r></w:p><w:p><w:r><w:t>日時：{{打合せ日}}　場所：{{場所}}</w:t></w:r></w:p><w:p><w:r><w:t>{{議事録メモ}}</w:t></w:r></w:p></w:body></w:document>');
+    const k = mock.addFile(await z.generateAsync({ type: 'nodebuffer' }), 'gijiroku.docx');
+    mock.addRecord('10', { 書類名: { value: '議事録' }, 工程: { value: '打合せ・見積・提案' }, 表示順: { value: '205' }, 説明: { value: '' }, 見られる立場: { value: ['営業'] }, 使用状況: { value: '使用中' }, 雛形: { value: [{ fileKey: k, name: 'gijiroku.docx' }] } });
+    const { page, errors } = await openPage(browser, url, '/__page');
+    await page.locator('[data-doc-hub]').click();
+    await page.getByText('工程別の書類：').waitFor();
+    await page.locator('select').nth(0).selectOption('打合せ・見積・提案');
+    await page.locator('div[style*="border-top"]', { hasText: '議事録' }).getByRole('button', { name: '作成して保存' }).click();
+    // 入力欄：{{ }} にある項目（打合せ日・場所・議事録メモ）だけ出る
+    await page.locator('[data-ask="議事録メモ"]').waitFor();
+    assert.strictEqual(await page.locator('[data-ask="出席者"]').count(), 0, '雛形にない項目の欄は出ない');
+    await page.locator('[data-ask="打合せ日"]').fill('2026-10-21');
+    await page.locator('[data-ask="場所"]').fill('現場事務所');
+    await page.locator('[data-ask="議事録メモ"]').fill('- 見積の再提出\n\n● 工程表の確認\n・来週、現地調査');
+    const [dl] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: '作成して保存' }).last().click()]);
+    const got = []; for await (const c of await dl.createReadStream()) got.push(c);
+    const xml = await (await JSZip.loadAsync(Buffer.concat(got))).file('word/document.xml').async('string');
+    const text = xml.replace(/<w:br\/>/g, '\n').replace(/<[^>]*>/g, '');
+    assert.match(text, /議事録 東京Aビル 改修工事/);
+    assert.match(text, /日時：2026年10月21日　場所：現場事務所/);
+    assert.match(text, /・見積の再提出\n・工程表の確認\n・来週、現地調査/, '記号がそろい、空行は消える');
+    assert.strictEqual(stored(mock).length, 1);
+    assert.deepStrictEqual(errors, []);
+  } finally { await browser.close(); await mock.close(); }
+});

@@ -125,18 +125,35 @@
         .then(function (data) { return { data: data, unknown: unknown, empty: empty }; });
     });
   }
-  // 雛形に {{ }} が1つでもあるか。なければ「案件の情報は入れず、雛形のまま使う書類」として扱う
-  function hasPlaceholders(JSZipLib, buf, ext) {
-    if (!OFFICE[ext]) return Promise.resolve(false);
+  // 雛形の中の {{ }} の名前を、全部集める（なければ空の配列）
+  function listPlaceholders(JSZipLib, buf, ext) {
+    if (!OFFICE[ext]) return Promise.resolve([]);
     return JSZipLib.loadAsync(buf).then(function (zip) {
       var names = Object.keys(zip.files).filter(function (n) { return TARGET.test(n); });
       return Promise.all(names.map(function (n) {
         return zip.file(n).async('string').then(function (x) {
           if (n === 'xl/sharedStrings.xml') x = dropPhonetic(x);
-          return /\{\{[^{}]+\}\}/.test(x.replace(/<[^>]*>/g, ''));
+          return (x.replace(/<[^>]*>/g, '').match(/\{\{[^{}]+\}\}/g) || []).map(function (t) { return decodeLabel(t.slice(2, -2)); });
         });
-      })).then(function (r) { return r.some(Boolean); });
+      })).then(function (r) { return [].concat.apply([], r); });
     });
+  }
+  // 雛形に {{ }} が1つでもあるか。なければ「案件の情報は入れず、雛形のまま使う書類」として扱う
+  function hasPlaceholders(JSZipLib, buf, ext) {
+    return listPlaceholders(JSZipLib, buf, ext).then(function (l) { return l.length > 0; });
+  }
+  // 議事録など、作成のときに入力してもらう項目（雛形に {{打合せ日}} {{議事録メモ}} などと書くと、入力欄が出る）
+  var ASK = [
+    { key: '打合せ日', label: '打合せ日', type: 'date' },
+    { key: '場所', label: '場所', type: 'text' },
+    { key: '出席者', label: '出席者', type: 'text' },
+    { key: '議題', label: '議題', type: 'text' },
+    { key: '議事録メモ', label: 'メモ（箇条書き。1行に1項目）', type: 'memo' }
+  ];
+  // 箇条書きの記号（- * ● • ・）をそろえる。空行は取り除く
+  function tidyMemo(t) {
+    return String(t || '').split(/\r?\n/).map(function (l) { return l.trim(); }).filter(Boolean)
+      .map(function (l) { return l.replace(/^[-*●•・‣]\s*/, '・'); }).join('\n');
   }
   // 案件名から、橋梁か一般道路かを推定する。「〇〇橋」「高架橋」「跨線橋」「橋梁」が入っていれば橋梁。
   // 「橋本」「橋口」のような地名の「橋」は、橋として数えない
@@ -240,6 +257,7 @@
     setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
   }
   var kinds = {};   // 雛形のファイルキー → 'merge'（{{ }}あり）／'plain'（雛形のまま）
+  var phs = {};     // 雛形のファイルキー → 雛形の中の {{ }} の名前
   function templateOf(rec) { var f = rec[MF.template] && rec[MF.template].value; return f && f[0]; }
   function extOf(name) { return ((String(name).match(/\.([^.]+)$/) || [])[1] || '').toLowerCase(); }
   var pending = {};
@@ -248,11 +266,12 @@
     if (!tpl) return Promise.resolve('merge');
     if (kinds[tpl.fileKey]) return Promise.resolve(kinds[tpl.fileKey]);
     if (pending[tpl.fileKey]) return pending[tpl.fileKey];
-    pending[tpl.fileKey] = download(tpl.fileKey).then(function (buf) { return hasPlaceholders(JSZip, buf, extOf(tpl.name)); })
-      .then(function (has) { kinds[tpl.fileKey] = has ? 'merge' : 'plain'; delete pending[tpl.fileKey]; return kinds[tpl.fileKey]; },
+    pending[tpl.fileKey] = download(tpl.fileKey).then(function (buf) { return listPlaceholders(JSZip, buf, extOf(tpl.name)); })
+      .then(function (list) { phs[tpl.fileKey] = list; kinds[tpl.fileKey] = list.length ? 'merge' : 'plain'; delete pending[tpl.fileKey]; return kinds[tpl.fileKey]; },
         function () { delete pending[tpl.fileKey]; return 'merge'; });   // 調べられないときは、従来どおり「作成して保存」にする
     return pending[tpl.fileKey];
   }
+  function asksOf(rec) { var t = templateOf(rec); var l = (t && phs[t.fileKey]) || []; return ASK.filter(function (a) { return l.indexOf(a.key) >= 0; }); }
   function kindOf(rec) { var t = templateOf(rec); return t ? kinds[t.fileKey] : undefined; }
   function openAsIs(rec) {
     var tpl = templateOf(rec);
@@ -312,7 +331,7 @@
     });
   }
 
-  function createDoc(masterRec, ctx) {
+  function createDoc(masterRec, ctx, extra) {
     var docName = fieldText(masterRec[MF.name]);
     var files = masterRec[MF.template].value;
     if (!files || !files.length) return Promise.reject(new Error('「' + docName + '」の雛形が書類マスタに登録されていません'));
@@ -323,7 +342,8 @@
     return Promise.all([projectRecord(ctx.projectId), download(tpl.fileKey)]).then(function (res) {
       var record = res[0], cur = existingOf(record)[docName];
       var version = (cur ? cur.version : 0) + 1;
-      var values = Object.assign({}, ctx.values, { '版': 'v' + version, '書類名': docName });
+      var blank = {}; ASK.forEach(function (a) { blank[a.key] = ''; });   // 入力されなかった項目は、空のまま入れて、あとで知らせる
+      var values = Object.assign(blank, ctx.values, extra || {}, { '版': 'v' + version, '書類名': docName });
       return fillTemplate(JSZip, res[1], ext, values).then(function (out) {
         var filename = buildFilename(ctx.projectName, docName, version, ext);
         return storeRow(record, ctx, docName, fieldText(masterRec[MF.stage]), version, filename, out.data).then(function (r) {
@@ -455,10 +475,40 @@
         });
       }
       // 作成に成功したら、画面上の「最新 vN」もその場で更新する（まとめ作成が途中で失敗しても、再実行で二重に作らない）
-      function makeOne(rec) {
-        return createDoc(rec, ctx).then(function (r) {
+      function makeOne(rec, extra) {
+        return createDoc(rec, ctx, extra).then(function (r) {
           existing[fieldText(rec[MF.name])] = { version: r.version, filename: r.filename, data: r.data };
           return r;
+        });
+      }
+      // 議事録などの入力欄（雛形に {{打合せ日}} {{議事録メモ}} などがあるときだけ出す）
+      function askValues(asks, name) {
+        return new Promise(function (resolve) {
+          var cover = el('div', 'position:fixed;left:0;top:0;right:0;bottom:0;background:rgba(0,0,0,.45);z-index:10001;overflow:auto');
+          var card = el('div', 'background:#fff;max-width:560px;margin:40px auto;border-radius:8px;padding:16px;font-size:14px;box-sizing:border-box;width:calc(100% - 24px)');
+          card.appendChild(el('div', 'font-weight:bold;font-size:16px;margin-bottom:10px', '「' + name + '」の内容'));
+          var inputs = {};
+          asks.forEach(function (a) {
+            card.appendChild(el('div', 'font-size:12px;color:#666;margin-top:8px', a.label));
+            var inp = a.type === 'memo' ? el('textarea', 'width:100%;height:160px;box-sizing:border-box;font-size:14px;padding:6px') : el('input', 'width:100%;box-sizing:border-box;font-size:14px;padding:6px');
+            if (a.type === 'date') { inp.type = 'date'; inp.value = isoToday(); } else if (a.type === 'text') inp.type = 'text';
+            inp.setAttribute('data-ask', a.key); inputs[a.key] = inp; card.appendChild(inp);
+          });
+          var bar = el('div', 'margin-top:12px;display:flex;gap:8px;justify-content:flex-end');
+          var cancel = el('button', 'padding:8px 14px;cursor:pointer', 'やめる'); cancel.type = 'button';
+          var ok = el('button', 'padding:8px 14px;cursor:pointer;font-weight:bold', '作成して保存'); ok.type = 'button';
+          function close(v) { document.body.removeChild(cover); resolve(v); }
+          cancel.addEventListener('click', function () { close(null); });
+          ok.addEventListener('click', function () {
+            var v = {};
+            asks.forEach(function (a) {
+              var t = inputs[a.key].value;
+              if (a.type === 'date') { var m = t.match(/^(\d{4})-(\d{2})-(\d{2})$/); t = m ? m[1] + '年' + Number(m[2]) + '月' + Number(m[3]) + '日' : t; }
+              v[a.key] = a.type === 'memo' ? tidyMemo(t) : t.trim();
+            });
+            close(v);
+          });
+          bar.appendChild(cancel); bar.appendChild(ok); card.appendChild(bar); cover.appendChild(card); document.body.appendChild(cover);
         });
       }
       function makeRow(rec) {
@@ -489,9 +539,13 @@
           }
           var cur = existing[name];
           if (cur && !confirm('「' + name + '」は v' + cur.version + ' まで作成済みです。v' + (cur.version + 1) + ' を作成しますか？')) return;
-          btn.disabled = true; setMsg('作成しています…', false);
-          makeOne(rec).then(function (r) { saveAs(r.data, r.filename); reloadSoon('保存してダウンロードしました：' + r.filename + unknownNote(r.unknown, r.empty), !!((r.unknown && r.unknown.length) || (r.empty && r.empty.length))); })
-            .catch(function (e) { btn.disabled = false; setMsg((e && e.message) || '作成できませんでした', true); });
+          var asks = asksOf(rec);
+          (asks.length ? askValues(asks, name) : Promise.resolve({})).then(function (extra) {
+            if (!extra) return;
+            btn.disabled = true; setMsg('作成しています…', false);
+            return makeOne(rec, extra).then(function (r) { saveAs(r.data, r.filename); reloadSoon('保存してダウンロードしました：' + r.filename + unknownNote(r.unknown, r.empty), !!((r.unknown && r.unknown.length) || (r.empty && r.empty.length))); })
+              .catch(function (e) { btn.disabled = false; setMsg((e && e.message) || '作成できませんでした', true); });
+          });
         });
         var right = el('div', 'display:flex;flex-direction:column;gap:6px;align-items:stretch');
         right.appendChild(btn);
