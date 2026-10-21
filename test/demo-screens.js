@@ -125,6 +125,9 @@ const PAGE = (type) => `
   await shot('橋梁', '1_案件の詳細画面.png', async () => {});
   // 1b) 案件の一番下：書類保管表（作った書類が、版つきで並ぶ）
   await shot('橋梁', '1b_案件の書類保管表.png', async (page) => { await page.setViewportSize({ width: 980, height: 560 }); });
+  // 1c) 右下の丸いボタン（通常）と、近づけたとき（文字つきに広がる）
+  await shot('橋梁', '1c_右下の丸いボタン.png', async (page) => { await page.setViewportSize({ width: 980, height: 560 }); await page.waitForTimeout(300); });
+  await shot('橋梁', '1d_近づけると広がる.png', async (page) => { await page.setViewportSize({ width: 980, height: 560 }); await page.locator('[data-doc-hub]').hover(); await page.waitForTimeout(500); });
   // 2) 橋梁の案件：施工前の書類
   const open = async (page, stage) => {
     await page.locator('[data-doc-hub]').click();

@@ -303,7 +303,7 @@ test('画面：案件名に「橋」があれば、対象は自動で「橋梁�
   } finally { await browser.close(); await mock.close(); }
 });
 
-test('画面：「書類関係」タブの中のスペースがあれば、ボタンはそこに出る（なければヘッダーに出る）', { skip }, async () => {
+test('画面：右下の丸いボタン。近づけると文字つきに広がる。書類関係タブ（スペース）を開いている間だけ見える', { skip }, async () => {
   const mock = createMock(); const url = await mock.listen();
   const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
   try {
@@ -312,12 +312,38 @@ test('画面：「書類関係」タブの中のスペースがあれば、ボ�
     const errors = []; page.on('pageerror', (e) => errors.push(e.message));
     await page.addInitScript(FAKE_KINTONE);
     await page.goto(url + '/__page');
-    await page.evaluate(() => { var d = document.createElement('div'); d.id = 'tabspace'; document.body.appendChild(d); });
+    await page.evaluate(() => { var d = document.createElement('div'); d.id = 'tabspace'; d.style.height = '20px'; document.body.appendChild(d); });
     await page.evaluate((r) => window.__fire(r), RECORD);
-    assert.strictEqual(await page.locator('#tabspace [data-doc-hub]').count(), 1, 'タブの中のスペースに出る');
-    assert.strictEqual(await page.locator('#hdr [data-doc-hub]').count(), 0, 'ヘッダーには出さない');
+    const fab = page.locator('[data-doc-hub]');
+    assert.strictEqual(await fab.count(), 1);
+    const box = await fab.boundingBox();
+    assert.ok(box.width < 70 && Math.abs(box.width - box.height) < 20, '最初は、丸い小さなボタン：' + box.width);
+    const vp = page.viewportSize();
+    assert.ok(box.x + box.width > vp.width - 40 && box.y + box.height < vp.height, '画面の右下にある');
+    await fab.hover();
+    await page.waitForFunction(() => document.querySelector('[data-doc-hub]').getBoundingClientRect().width > 120);   // 近づけると、文字つきに広がる
+    assert.match(await fab.textContent(), /書類を作る/);
+    // タブを閉じる（スペースが隠れる）と、ボタンも隠れ、開くと、また出る
+    await page.evaluate(() => { document.getElementById('tabspace').style.display = 'none'; });
+    await page.waitForFunction(() => document.querySelector('[data-doc-hub]').style.display === 'none');
+    await page.evaluate(() => { document.getElementById('tabspace').style.display = 'block'; });
+    await page.waitForFunction(() => document.querySelector('[data-doc-hub]').style.display === 'flex');
+    // 押すと、書類のパネルが開く
+    await fab.click();
+    await page.getByText('工程別の書類：').waitFor();
     assert.deepStrictEqual(errors, []);
     await ctx.close();
+  } finally { await browser.close(); await mock.close(); }
+});
+
+test('画面：ボタン用スペースがなければ、右下のボタンは、いつでも見える', { skip }, async () => {
+  const mock = createMock(); const url = await mock.listen();
+  const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
+  try {
+    await seed(mock);
+    const { page, errors } = await openPage(browser, url, '/__page');
+    assert.strictEqual(await page.locator('[data-doc-hub]').isVisible(), true);
+    assert.deepStrictEqual(errors, []);
   } finally { await browser.close(); await mock.close(); }
 });
 

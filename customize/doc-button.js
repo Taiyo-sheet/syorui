@@ -626,16 +626,36 @@
     }
   }
 
+  // 画面の右下に浮かぶ丸いボタン。マウスを近づけると（スマートフォンでは、押すと）、文字つきに広がる。
+  // ボタン用スペース（書類関係タブの中）があれば、そのタブを開いている間だけ見える。なければ、いつでも見える
+  var FAB_SIZE = 52;
+  function floatingButton(label, space, onClick) {
+    var old = document.querySelector('[data-doc-hub]'); if (old && old.parentNode) old.parentNode.removeChild(old);
+    var fab = el('button', 'position:fixed;right:16px;bottom:96px;z-index:9999;height:' + FAB_SIZE + 'px;min-width:' + FAB_SIZE + 'px;border:0;border-radius:' + (FAB_SIZE / 2) + 'px;background:#0b5fb8;color:#fff;box-shadow:0 4px 12px rgba(0,0,0,.35);cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0 14px;font-size:14px;font-weight:bold;overflow:hidden;white-space:nowrap');
+    fab.type = 'button'; fab.setAttribute('data-doc-hub', '1'); fab.setAttribute('aria-label', label);
+    var icon = el('span', 'font-size:22px;line-height:1', '📄');
+    var text = el('span', 'display:inline-block;max-width:0;opacity:0;margin-left:0;transition:max-width .25s,opacity .25s,margin-left .25s', label);
+    fab.appendChild(icon); fab.appendChild(text);
+    function open() { text.style.maxWidth = '160px'; text.style.opacity = '1'; text.style.marginLeft = '8px'; }
+    function close() { text.style.maxWidth = '0'; text.style.opacity = '0'; text.style.marginLeft = '0'; }
+    fab.addEventListener('mouseenter', open); fab.addEventListener('focus', open);
+    fab.addEventListener('mouseleave', close); fab.addEventListener('blur', close);
+    fab.addEventListener('click', onClick);
+    document.body.appendChild(fab);
+    // 書類関係タブを開いている間だけ見せる（タブを閉じると、スペースが隠れる）
+    if (space) {
+      var sync = function () { fab.style.display = space.offsetParent !== null ? 'flex' : 'none'; };
+      sync(); var timer = setInterval(function () { if (!document.body.contains(fab)) { clearInterval(timer); return; } sync(); }, 400);
+    }
+    return fab;
+  }
+
   function onShow(event) {
     if (typeof JSZip === 'undefined') { console.error('JSZipが読み込まれていません。JavaScriptの読み込み順を確認してください。'); return event; }
-    var host = null;
-    try { host = recApi.getSpaceElement(BUTTON_SPACE_ID); } catch (e) { host = null; }
-    if (!host) host = isMobile ? kintone.mobile.app.getHeaderSpaceElement() : kintone.app.record.getHeaderMenuSpaceElement();
-    if (!host || host.querySelector('[data-doc-hub]')) return event;
+    var space = null;
+    try { space = recApi.getSpaceElement(BUTTON_SPACE_ID); } catch (e) { space = null; }
     var record = event.record, projectId = recApi.getId();
-    var btn = el('button', 'padding:8px 14px;font-size:14px;font-weight:bold;cursor:pointer;margin:4px 8px', '書類を作る');
-    btn.type = 'button'; btn.setAttribute('data-doc-hub', '1');
-    btn.addEventListener('click', function () {
+    floatingButton('書類を作る', space, function () {
       loadLabelMap(record).then(function (lm) {
         var values = buildValues(record, lm);
         var projectName = '';
@@ -646,7 +666,6 @@
         });
       });
     });
-    host.appendChild(btn);
     return event;
   }
   kintone.events.on(['app.record.detail.show', 'mobile.app.record.detail.show'], onShow);
