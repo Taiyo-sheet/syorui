@@ -16,7 +16,7 @@ const { client } = require('./lib');
 const lib = require('../customize/doc-button.js');
 
 const arg = (n) => ((process.argv.find((a) => a.startsWith('--' + n + '=')) || '').split('=')[1] || '');
-const NAME_LABELS = ['案件名', '現場名', '工事名'];
+const NAME_LABELS = ['工事名称', '案件名', '現場名', '工事名'];
 
 async function one(k, name) {
   const f = await k.findApps(name);
