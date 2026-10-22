@@ -792,38 +792,9 @@
     }
   }
 
-  // 画面の右下に浮かぶ丸いボタン。マウスを近づけると（スマートフォンでは、押すと）、文字つきに広がる。
-  // ボタン用スペース（書類関係タブの中）があれば、そのタブを開いている間だけ見える。なければ、いつでも見える
+  // 画面の右下に浮かぶ丸いボタン（書類関係タブの中に置けないときの予備）。マウスを近づけると、文字つきに広がる。いつでも見える
   var FAB_SIZE = 52;
-  // 「タブ表示」プラグインのタブの名前。そのタブが選ばれている（色が違う）間は、書類保管の表が、そのタブに入っていなくても、ボタンを見せる
-  var TAB_NAME = '書類関係';
-  function bgOf(el) {
-    for (var i = 0; el && i < 4; i++, el = el.parentElement) {
-      var c = getComputedStyle(el).backgroundColor;
-      if (c && c !== 'transparent' && !/rgba\(\s*0,\s*0,\s*0,\s*0\s*\)/.test(c)) return c;
-    }
-    return '';
-  }
-  function leafByText(text) {
-    var all = document.querySelectorAll('div,span,td,th,li,a,button,p');
-    for (var i = 0; i < all.length; i++) { if (!all[i].children.length && all[i].textContent.trim() === text) return all[i]; }
-    return null;
-  }
-  // タブの名前が TAB_NAME のものが、選ばれているか（ほかのタブの色と違えば、選ばれている）。タブが見つからなければ、false
-  function tabActive() {
-    try {
-      var me = leafByText(TAB_NAME); if (!me) return false;
-      var mine = bgOf(me), others = 0, same = 0;
-      var row = me.parentElement; for (var i = 0; row && i < 3; i++, row = row.parentElement) { if (row.textContent.indexOf('工事部') >= 0 && row.textContent.indexOf('施工店') >= 0) break; }
-      if (!row) return false;
-      Array.prototype.forEach.call(row.querySelectorAll('div,span,td,th,li,a,button'), function (e) {
-        if (e.children.length || e === me || !e.textContent.trim()) return;
-        others++; if (bgOf(e) === mine) same++;
-      });
-      return others > 1 && same < others / 2;
-    } catch (e) { return false; }
-  }
-  function floatingButton(label, space, onClick) {
+  function floatingButton(label, onClick) {
     var old = document.querySelector('[data-doc-hub]'); if (old && old.parentNode) old.parentNode.removeChild(old);
     var fab = el('button', 'position:fixed;right:16px;bottom:96px;z-index:9999;height:' + FAB_SIZE + 'px;min-width:' + FAB_SIZE + 'px;border:0;border-radius:' + (FAB_SIZE / 2) + 'px;background:#0b5fb8;color:#fff;box-shadow:0 4px 12px rgba(0,0,0,.35);cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0 14px;font-size:14px;font-weight:bold;overflow:hidden;white-space:nowrap');
     fab.type = 'button'; fab.setAttribute('data-doc-hub', '1'); fab.setAttribute('aria-label', label);
@@ -836,11 +807,6 @@
     fab.addEventListener('mouseleave', close); fab.addEventListener('blur', close);
     fab.addEventListener('click', onClick);
     document.body.appendChild(fab);
-    // 書類関係タブを開いている間だけ見せる（タブを閉じると、スペースが隠れる）
-    if (space) {
-      var sync = function () { fab.style.display = (space.offsetParent !== null || tabActive()) ? 'flex' : 'none'; };
-      sync(); var timer = setInterval(function () { if (!document.body.contains(fab)) { clearInterval(timer); return; } sync(); }, 400);
-    }
     return fab;
   }
 
@@ -848,7 +814,8 @@
   // 目印が見えている間（＝書類関係タブを開いている間）だけ見える。目印が見つからなければ、null を返す
   var ANCHOR_FIELD = '安全書類格納完了チェック';   // 案件くんの、書類関係タブの中にある項目（フィールドコード。案件くんのレイアウトで確認済み）
   function inlineButton(label, anchor, onClick) {
-    var row = anchor.closest && (anchor.closest('.row-gaia') || anchor.closest('.control-gaia'));
+    // 目印の項目を入れている枠の、すぐ上に入れる。キントーンの枠の呼び名が違っても、置けるように、見つかる一番外の枠を使う
+    var row = (anchor.closest && (anchor.closest('.row-gaia') || anchor.closest('.control-gaia'))) || anchor.parentElement;
     if (!row || !row.parentNode) return null;
     var olds = document.querySelectorAll('[data-doc-hub]'); Array.prototype.forEach.call(olds, function (o) { if (o.parentNode) o.parentNode.removeChild(o); });
     var wrap = el('div', 'padding:6px 0 10px');
@@ -864,15 +831,10 @@
 
   function onShow(event) {
     if (typeof JSZip === 'undefined') { console.error('JSZipが読み込まれていません。JavaScriptの読み込み順を確認してください。'); return event; }
-    // ボタンを見せる目印：「書類保管」の表（書類関係タブの中にある項目）。表が見えている間だけ、ボタンも見える。
-    // 表が見つからなければ、ボタン用スペース、それもなければ、いつでも見せる
-    var space = null;
-    try { space = recApi.getFieldElement(SUB.table); } catch (e) { space = null; }
-    if (!space) { try { space = recApi.getSpaceElement(BUTTON_SPACE_ID); } catch (e) { space = null; } }
     var record = event.record, projectId = recApi.getId();
     var anchor = null;
     try { anchor = recApi.getFieldElement(ANCHOR_FIELD); } catch (e) { anchor = null; }
-    var place = function (label, onClick) { return (anchor && inlineButton(label, anchor, onClick)) || floatingButton(label, space, onClick); };   // 書類関係タブの中に置く。置けなければ、右下の丸いボタン
+    var place = function (label, onClick) { return (anchor && inlineButton(label, anchor, onClick)) || floatingButton(label, onClick); };   // 書類関係タブの中に置く。置けなければ、右下の丸いボタン
     place('書類を作る', function () {
       loadLabelMap(record).then(function (lm) {
         var values = buildValues(record, lm);

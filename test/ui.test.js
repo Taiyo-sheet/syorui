@@ -304,67 +304,6 @@ test('画面：案件名に「橋」があれば、対象は自動で「橋梁�
   } finally { await browser.close(); await mock.close(); }
 });
 
-test('画面：右下の丸いボタン。近づけると文字つきに広がる。書類関係タブ（スペース）を開いている間だけ見える', { skip }, async () => {
-  const mock = createMock(); const url = await mock.listen();
-  const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
-  try {
-    await seed(mock);
-    const ctx = await browser.newContext(); const page = await ctx.newPage();
-    const errors = []; page.on('pageerror', (e) => errors.push(e.message));
-    await page.addInitScript(FAKE_KINTONE);
-    await page.goto(url + '/__page');
-    await page.evaluate(() => { var d = document.createElement('div'); d.id = 'tabspace'; d.style.height = '20px'; document.body.appendChild(d); });
-    await page.evaluate((r) => window.__fire(r), RECORD);
-    const fab = page.locator('[data-doc-hub]');
-    assert.strictEqual(await fab.count(), 1);
-    const box = await fab.boundingBox();
-    assert.ok(box.width < 70 && Math.abs(box.width - box.height) < 20, '最初は、丸い小さなボタン：' + box.width);
-    const vp = page.viewportSize();
-    assert.ok(box.x + box.width > vp.width - 40 && box.y + box.height < vp.height, '画面の右下にある');
-    await fab.hover();
-    await page.waitForFunction(() => document.querySelector('[data-doc-hub]').getBoundingClientRect().width > 120);   // 近づけると、文字つきに広がる
-    assert.match(await fab.textContent(), /書類を作る/);
-    // タブを閉じる（スペースが隠れる）と、ボタンも隠れ、開くと、また出る
-    await page.evaluate(() => { document.getElementById('tabspace').style.display = 'none'; });
-    await page.waitForFunction(() => document.querySelector('[data-doc-hub]').style.display === 'none');
-    await page.evaluate(() => { document.getElementById('tabspace').style.display = 'block'; });
-    await page.waitForFunction(() => document.querySelector('[data-doc-hub]').style.display === 'flex');
-    // 押すと、書類のパネルが開く
-    await fab.click();
-    await page.getByText('工程別の書類：').waitFor();
-    assert.deepStrictEqual(errors, []);
-    await ctx.close();
-  } finally { await browser.close(); await mock.close(); }
-});
-
-test('画面：「書類保管」の表が見えている間だけ、右下のボタンも見える（表が優先。表が見つからなければ、スペース）', { skip }, async () => {
-  const mock = createMock(); const url = await mock.listen();
-  const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
-  try {
-    await seed(mock);
-    const ctx = await browser.newContext(); const page = await ctx.newPage();
-    await page.addInitScript(FAKE_KINTONE);
-    await page.goto(url + '/__page');
-    await page.evaluate(() => { var t = document.createElement('div'); t.id = 'tabtable'; t.style.height = '20px'; document.body.appendChild(t); var s = document.createElement('div'); s.id = 'tabspace'; s.style.display = 'none'; document.body.appendChild(s); });
-    await page.evaluate((r) => window.__fire(r), RECORD);
-    assert.strictEqual(await page.locator('[data-doc-hub]').isVisible(), true, '表が見えていれば、スペースが隠れていても出る');
-    await page.evaluate(() => { document.getElementById('tabtable').style.display = 'none'; });
-    await page.waitForFunction(() => document.querySelector('[data-doc-hub]').style.display === 'none');
-    await ctx.close();
-  } finally { await browser.close(); await mock.close(); }
-});
-
-test('画面：ボタン用スペースがなければ、右下のボタンは、いつでも見える', { skip }, async () => {
-  const mock = createMock(); const url = await mock.listen();
-  const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
-  try {
-    await seed(mock);
-    const { page, errors } = await openPage(browser, url, '/__page');
-    assert.strictEqual(await page.locator('[data-doc-hub]').isVisible(), true);
-    assert.deepStrictEqual(errors, []);
-  } finally { await browser.close(); await mock.close(); }
-});
-
 test('画面：全工程をまとめて作成（未作成だけ）／2回目は「すべて作成済み」', { skip }, async () => {
   const mock = createMock(); const url = await mock.listen();
   const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
@@ -637,32 +576,6 @@ test('画面：PDF化は、承認済みの書類だけ。サーバー未設定�
   } finally { await browser.close(); await mock.close(); }
 });
 
-test('画面：書類保管の表がタブに入っていなくても、「書類関係」タブが選ばれている間は、ボタンが見える（タブの色で判断）', { skip }, async () => {
-  const mock = createMock(); const url = await mock.listen();
-  const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
-  try {
-    await seed(mock);
-    const ctx = await browser.newContext(); const page = await ctx.newPage();
-    const errors = []; page.on('pageerror', (e) => errors.push(e.message));
-    await page.addInitScript(FAKE_KINTONE);
-    await page.goto(url + '/__page');
-    await page.evaluate(() => {
-      var t = document.createElement('div'); t.id = 'tabtable'; t.style.display = 'none'; document.body.appendChild(t);   // 表は、どのタブにも入っていなくて、隠れている
-      var bar = document.createElement('div'); bar.id = 'tabs';
-      ['営業部', '工事部', '書類関係', '施工店'].forEach(function (n) { var d = document.createElement('div'); d.textContent = n; d.style.cssText = 'display:inline-block;padding:6px 10px;background:rgb(200,200,200)'; bar.appendChild(d); });
-      document.body.appendChild(bar);
-    });
-    await page.evaluate((r) => window.__fire(r), RECORD);
-    const fab = page.locator('[data-doc-hub]');
-    await page.waitForFunction(() => document.querySelector('[data-doc-hub]').style.display === 'none');   // 選ばれていない間は、出ない
-    await page.evaluate(() => { [].forEach.call(document.querySelectorAll('#tabs div'), function (d) { if (d.textContent === '書類関係') d.style.background = 'rgb(52,152,219)'; }); });
-    await page.waitForFunction(() => document.querySelector('[data-doc-hub]').style.display === 'flex');   // 選ばれると、出る
-    await fab.click(); await page.getByText('工程別の書類：').waitFor();
-    assert.deepStrictEqual(errors, []);
-    await ctx.close();
-  } finally { await browser.close(); await mock.close(); }
-});
-
 test('画面：書類関係タブの中（目印の項目の行の、すぐ上）にボタンが出る。タブを閉じると隠れる。見出しの「閉じる」は、折り返さない', { skip }, async () => {
   const mock = createMock(); const url = await mock.listen();
   const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
@@ -691,6 +604,45 @@ test('画面：書類関係タブの中（目印の項目の行の、すぐ上�
     const close = page.getByRole('button', { name: '閉じる' });
     const box = await close.boundingBox();
     assert.ok(box.height < 50, '「閉じる」が、折り返されない（高さ ' + box.height + '）');
+    assert.deepStrictEqual(errors, []);
+    await ctx.close();
+  } finally { await browser.close(); await mock.close(); }
+});
+
+test('画面：右下の丸いボタン（予備）。目印の項目がなければ、いつでも見える。近づけると文字つきに広がり、押すとパネルが開く', { skip }, async () => {
+  const mock = createMock(); const url = await mock.listen();
+  const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
+  try {
+    await seed(mock);
+    const { page, errors } = await openPage(browser, url, '/__page');
+    const fab = page.locator('[data-doc-hub]');
+    assert.strictEqual(await fab.count(), 1); assert.strictEqual(await fab.isVisible(), true);
+    const box = await fab.boundingBox(); const vp = page.viewportSize();
+    assert.ok(box.width < 70 && Math.abs(box.width - box.height) < 20, '最初は丸い小さなボタン：' + box.width);
+    assert.ok(box.x + box.width > vp.width - 40 && box.y + box.height < vp.height, '画面の右下');
+    await page.evaluate((r) => window.__fire(r), RECORD);   // 画面を開き直しても、1つだけ
+    assert.strictEqual(await page.locator('[data-doc-hub]').count(), 1);
+    await fab.hover();
+    await page.waitForFunction(() => document.querySelector('[data-doc-hub]').getBoundingClientRect().width > 120);
+    assert.match(await fab.textContent(), /書類を作る/);
+    await fab.click(); await page.getByText('工程別の書類：').waitFor();
+    assert.deepStrictEqual(errors, []);
+  } finally { await browser.close(); await mock.close(); }
+});
+
+test('画面：目印の項目の枠の呼び名が違っても（row-gaia が無くても）、目印の近くにボタンを置く。置けなければ右下', { skip }, async () => {
+  const mock = createMock(); const url = await mock.listen();
+  const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
+  try {
+    await seed(mock);
+    const ctx = await browser.newContext(); const page = await ctx.newPage();
+    const errors = []; page.on('pageerror', (e) => errors.push(e.message));
+    await page.addInitScript(FAKE_KINTONE);
+    await page.goto(url + '/__page');
+    await page.evaluate(() => { var t = document.createElement('div'); t.id = 'plain'; t.innerHTML = '<div><span id="anchor">安全書類格納完了</span></div>'; document.body.appendChild(t); });
+    await page.evaluate((r) => window.__fire(r), RECORD);
+    assert.strictEqual(await page.locator('#plain [data-doc-hub]').count(), 1, '枠の呼び名が違っても、目印の近くに置く');
+    assert.strictEqual(await page.locator('#plain [data-doc-hub]').isVisible(), true);
     assert.deepStrictEqual(errors, []);
     await ctx.close();
   } finally { await browser.close(); await mock.close(); }
