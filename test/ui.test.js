@@ -32,7 +32,7 @@ const FAKE_KINTONE = `
   api.url = function (p) { return p + '.json'; };
   var handlers = [];
   var header = function () { return document.getElementById('hdr'); };
-  var rec = function () { return { getId: function () { return 1; }, getHeaderMenuSpaceElement: header, getSpaceElement: function (id) { return id === 'doc_button_space' ? document.getElementById('tabspace') : null; }, getFieldElement: function (c) { return c === '書類保管' ? document.getElementById('tabtable') : null; } }; };
+  var rec = function () { return { getId: function () { return 1; }, getHeaderMenuSpaceElement: header, getSpaceElement: function (id) { return id === 'doc_button_space' ? document.getElementById('tabspace') : null; }, getFieldElement: function (c) { return c === '書類保管' ? document.getElementById('tabtable') : c === '安全書類格納完了チェック' ? document.getElementById('anchor') : null; } }; };
   window.kintone = {
     api: api,
     getRequestToken: function () { return 'tok'; },
@@ -658,6 +658,39 @@ test('画面：書類保管の表がタブに入っていなくても、「書�
     await page.evaluate(() => { [].forEach.call(document.querySelectorAll('#tabs div'), function (d) { if (d.textContent === '書類関係') d.style.background = 'rgb(52,152,219)'; }); });
     await page.waitForFunction(() => document.querySelector('[data-doc-hub]').style.display === 'flex');   // 選ばれると、出る
     await fab.click(); await page.getByText('工程別の書類：').waitFor();
+    assert.deepStrictEqual(errors, []);
+    await ctx.close();
+  } finally { await browser.close(); await mock.close(); }
+});
+
+test('画面：書類関係タブの中（目印の項目の行の、すぐ上）にボタンが出る。タブを閉じると隠れる。見出しの「閉じる」は、折り返さない', { skip }, async () => {
+  const mock = createMock(); const url = await mock.listen();
+  const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
+  try {
+    await seed(mock);
+    const ctx = await browser.newContext({ viewport: { width: 600, height: 700 } }); const page = await ctx.newPage();
+    const errors = []; page.on('pageerror', (e) => errors.push(e.message));
+    await page.addInitScript(FAKE_KINTONE);
+    await page.goto(url + '/__page');
+    await page.evaluate(() => {
+      var tab = document.createElement('div'); tab.id = 'tabcontent';
+      tab.innerHTML = '<div class="row-gaia" id="row"><div class="control-gaia"><div id="anchor">安全書類格納完了</div></div></div>';
+      document.body.appendChild(tab);
+    });
+    await page.evaluate((r) => window.__fire(r), RECORD);
+    const inline = page.locator('#tabcontent [data-doc-hub]');
+    assert.strictEqual(await inline.count(), 1, 'タブの中に出る');
+    assert.strictEqual(await page.locator('body > [data-doc-hub]').count(), 0, '右下の丸いボタンは、出さない');
+    assert.strictEqual(await page.evaluate(() => document.getElementById('row').previousElementSibling.hasAttribute('data-doc-hub')), true, '目印の行の、すぐ上');
+    await page.evaluate(() => { document.getElementById('row').style.display = 'none'; });
+    await page.waitForFunction(() => document.querySelector('[data-doc-hub]').style.display === 'none');
+    await page.evaluate(() => { document.getElementById('row').style.display = 'block'; });
+    await page.waitForFunction(() => document.querySelector('[data-doc-hub]').style.display === 'block');
+    await inline.getByRole('button').click();
+    await page.getByText('工程別の書類：').waitFor();
+    const close = page.getByRole('button', { name: '閉じる' });
+    const box = await close.boundingBox();
+    assert.ok(box.height < 50, '「閉じる」が、折り返されない（高さ ' + box.height + '）');
     assert.deepStrictEqual(errors, []);
     await ctx.close();
   } finally { await browser.close(); await mock.close(); }

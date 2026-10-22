@@ -182,7 +182,8 @@
   }
   // 書類のチェック（外部には送らず、この画面の中だけで行う）。指摘のリストを返す（なければ空）
   //   values：案件くんの値（項目名 → 値）。書類の「工事名称：〇〇」が、案件くんの値と違えば、指摘する
-  var CHECK_LABELS = ['工事名称', '工事場所'];
+  // 案件くんの値と、書類の値を、突き合わせる項目。書類に「項目名：値」の行があり、値が違えば、指摘する（案件くんの全項目が対象）
+  var NOT_CHECKED = { '作成日': 1, '版': 1, '書類名': 1 };
   function checkText(text, values) {
     var out = [], t = String(text || '');
     var left = (t.match(/\{\{[^{}]+\}\}/g) || []).filter(function (x, i, a) { return a.indexOf(x) === i; });
@@ -194,12 +195,13 @@
       if (m && blanks.indexOf(m[1]) < 0) blanks.push(m[1]);
     });
     if (blanks.length) out.push('値が空の欄があります：' + blanks.join('、'));
-    // 案件くんの値と、書類の値が違う
-    CHECK_LABELS.forEach(function (lb) {
-      var want = values && values[lb] ? String(values[lb]).trim() : '';
-      if (!want) return;
-      var m = t.match(new RegExp('(?:^|\\n)[\\s■●◆□・]*' + lb + '[:：]\\s*([^\\n]+)'));
-      if (m && m[1].trim() && m[1].trim() !== want) out.push('「' + lb + '」が、案件くんの値と違います（書類：' + m[1].trim() + '／案件くん：' + want + '）');
+    // 案件くんの値と、書類の値が違う（案件くんの項目名ごとに、書類の「項目名：値」の行と突き合わせる）
+    var norm = function (x) { return String(x).replace(/\s+/g, ''); };
+    Object.keys(values || {}).forEach(function (lb) {
+      var want = values[lb] == null ? '' : String(values[lb]).trim();
+      if (NOT_CHECKED[lb] || !want || /\n/.test(want) || want.length > 80 || lb.length > 30) return;
+      var m = t.match(new RegExp('(?:^|\\n)[\\s■●◆□・]*' + lb.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[:：][ \\t　]*([^\\n]+)'));
+      if (m && m[1].trim() && norm(m[1]) !== norm(want)) out.push('「' + lb + '」が、案件くんの値と違います（書類：' + m[1].trim() + '／案件くん：' + want + '）');
     });
     if (/（例[:：]|\(例[:：]/.test(t)) out.push('「（例：…）」の見本の文が、そのまま残っています');
     if (/(^|\n)[^\n]*[:：]?\s*(　|\s)+年(　|\s)+月(　|\s)+日/.test(t)) out.push('日付が空欄のようです（「　年　月　日」）');
@@ -510,7 +512,7 @@
     var box = el('div', 'background:#fff;max-width:720px;margin:24px auto;border-radius:8px;padding:16px;font-size:14px;box-sizing:border-box;width:calc(100% - 24px)');
     var head = el('div', 'display:flex;justify-content:space-between;align-items:center;margin-bottom:10px');
     head.appendChild(el('div', 'font-weight:bold;font-size:17px', '工程別の書類：' + ctx.projectName));
-    var close = el('button', 'padding:6px 12px;font-size:14px;cursor:pointer', '閉じる'); close.type = 'button';
+    var close = el('button', 'padding:6px 12px;font-size:14px;cursor:pointer;white-space:nowrap;flex:none;margin-left:10px', '閉じる'); close.type = 'button';
     close.addEventListener('click', function () { document.body.removeChild(overlay); });
     head.appendChild(close);
     box.appendChild(head);
@@ -842,6 +844,24 @@
     return fab;
   }
 
+  // 書類関係タブの中（登録画面の、いちばん上）に置くボタン。目印の項目（ANCHOR_FIELD）の行の、すぐ上に入れる。
+  // 目印が見えている間（＝書類関係タブを開いている間）だけ見える。目印が見つからなければ、null を返す
+  var ANCHOR_FIELD = '安全書類格納完了チェック';   // 案件くんの、書類関係タブの中にある項目（フィールドコード。案件くんのレイアウトで確認済み）
+  function inlineButton(label, anchor, onClick) {
+    var row = anchor.closest && (anchor.closest('.row-gaia') || anchor.closest('.control-gaia'));
+    if (!row || !row.parentNode) return null;
+    var olds = document.querySelectorAll('[data-doc-hub]'); Array.prototype.forEach.call(olds, function (o) { if (o.parentNode) o.parentNode.removeChild(o); });
+    var wrap = el('div', 'padding:6px 0 10px');
+    wrap.setAttribute('data-doc-hub', '1');
+    var b = el('button', 'padding:10px 18px;font-size:15px;font-weight:bold;cursor:pointer;background:#0b5fb8;color:#fff;border:0;border-radius:6px;box-shadow:0 2px 6px rgba(0,0,0,.25)', '📄 ' + label);
+    b.type = 'button'; b.addEventListener('click', onClick);
+    wrap.appendChild(b);
+    row.parentNode.insertBefore(wrap, row);
+    var sync = function () { wrap.style.display = anchor.offsetParent !== null ? 'block' : 'none'; };
+    sync(); var timer = setInterval(function () { if (!document.body.contains(wrap)) { clearInterval(timer); return; } sync(); }, 400);
+    return wrap;
+  }
+
   function onShow(event) {
     if (typeof JSZip === 'undefined') { console.error('JSZipが読み込まれていません。JavaScriptの読み込み順を確認してください。'); return event; }
     // ボタンを見せる目印：「書類保管」の表（書類関係タブの中にある項目）。表が見えている間だけ、ボタンも見える。
@@ -850,7 +870,10 @@
     try { space = recApi.getFieldElement(SUB.table); } catch (e) { space = null; }
     if (!space) { try { space = recApi.getSpaceElement(BUTTON_SPACE_ID); } catch (e) { space = null; } }
     var record = event.record, projectId = recApi.getId();
-    floatingButton('書類を作る', space, function () {
+    var anchor = null;
+    try { anchor = recApi.getFieldElement(ANCHOR_FIELD); } catch (e) { anchor = null; }
+    var place = function (label, onClick) { return (anchor && inlineButton(label, anchor, onClick)) || floatingButton(label, space, onClick); };   // 書類関係タブの中に置く。置けなければ、右下の丸いボタン
+    place('書類を作る', function () {
       loadLabelMap(record).then(function (lm) {
         var values = buildValues(record, lm);
         var tbl = lm.props && lm.props[SUB.table], tf = (tbl && tbl.fields) || {};
