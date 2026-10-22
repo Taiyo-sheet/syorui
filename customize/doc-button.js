@@ -29,8 +29,8 @@
     // 承認とPDF（scripts/add-approval-fields.js で、書類保管の表に足す列。足すまでは、承認・PDF化のボタンは出ない）
     status: '書類保管_承認状況', by: '書類保管_承認者', approvedAt: '書類保管_承認日時', pdf: '書類保管_PDF' };
   var APPROVED = '承認済み';
-  // PDF化サーバーのURL（pdf-server/ を Render に置いたあとで、ここに入れる。空のあいだは、PDF化のボタンは押せない）
-  var PDF_SERVER_URL = '';
+  // PDF化サーバーのURL（Render に置いた pdf-server/。空にすると、PDF化のボタンは押せなくなる）
+  var PDF_SERVER_URL = 'https://ts-pdf-server.onrender.com';
   var ACTIVE = '使用中';
   var NAME_LABELS = ['工事名称', '案件名', '現場名', '工事名'];   // ファイル名に使う項目（先に見つかったもの）
   // 案件くんの項目のうち、「橋梁」「一般道路」など、書類マスタの「対象」と同じ言葉が入っているもの。

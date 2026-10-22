@@ -602,7 +602,7 @@ test('画面：PDF化は、承認済みの書類だけ。サーバー未設定�
     let withServer = false;
     await page.route('**/__lib/doc-button.js', async (route) => {
       let src = fs.readFileSync(require('path').join(__dirname, '..', 'customize', 'doc-button.js'), 'utf8');
-      if (withServer) src = src.replace("var PDF_SERVER_URL = '';", "var PDF_SERVER_URL = '" + url + "';");
+      src = src.replace(/var PDF_SERVER_URL = '[^']*';/, "var PDF_SERVER_URL = '" + (withServer ? url : '') + "';");
       await route.fulfill({ status: 200, contentType: 'text/javascript; charset=utf-8', body: src });
     });
     page.on('dialog', (d) => d.accept());
