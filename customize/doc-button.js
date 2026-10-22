@@ -25,7 +25,12 @@
   // 書類マスタの項目コード（scripts/create-apps.js で作ると、この名前になる）
   var MF = { stage: '工程', order: '表示順', name: '書類名', desc: '説明', template: '雛形', audience: '見られる立場', target: '対象', status: '使用状況' };
   // 案件くんの「書類保管」表（scripts/add-doc-storage.js で足す）の項目コード
-  var SUB = { table: '書類保管', name: '書類保管_書類名', stage: '書類保管_工程', version: '書類保管_版', file: '書類保管_ファイル', at: '書類保管_作成日' };
+  var SUB = { table: '書類保管', name: '書類保管_書類名', stage: '書類保管_工程', version: '書類保管_版', file: '書類保管_ファイル', at: '書類保管_作成日',
+    // 承認とPDF（scripts/add-approval-fields.js で、書類保管の表に足す列。足すまでは、承認・PDF化のボタンは出ない）
+    status: '書類保管_承認状況', by: '書類保管_承認者', approvedAt: '書類保管_承認日時', pdf: '書類保管_PDF' };
+  var APPROVED = '承認済み';
+  // PDF化サーバーのURL（pdf-server/ を Render に置いたあとで、ここに入れる。空のあいだは、PDF化のボタンは押せない）
+  var PDF_SERVER_URL = '';
   var ACTIVE = '使用中';
   var NAME_LABELS = ['工事名称', '案件名', '現場名', '工事名'];   // ファイル名に使う項目（先に見つかったもの）
   // 案件くんの項目のうち、「橋梁」「一般道路」など、書類マスタの「対象」と同じ言葉が入っているもの。
@@ -338,7 +343,12 @@
     var map = {};
     rowsOf(record).forEach(function (row) {
       var n = cellText(row, SUB.name), v = Number(cellText(row, SUB.version) || 0), files = row.value[SUB.file] && row.value[SUB.file].value;
-      if (n && (!map[n] || v >= map[n].version)) map[n] = { version: v, file: files && files[0] ? files[0] : null };
+      var pdfs = row.value[SUB.pdf] && row.value[SUB.pdf].value;
+      if (n && (!map[n] || v >= map[n].version)) map[n] = {
+        version: v, file: files && files[0] ? files[0] : null, rowId: row.id,
+        approved: cellText(row, SUB.status) === APPROVED, approver: cellText(row, SUB.by), approvedAt: cellText(row, SUB.approvedAt),
+        pdf: pdfs && pdfs[0] ? pdfs[0] : null
+      };
     });
     return map;
   }
@@ -346,7 +356,9 @@
   function keepRow(row) {
     var v = {};
     [SUB.name, SUB.stage, SUB.version, SUB.at].forEach(function (c) { v[c] = { value: cellText(row, c) }; });
+    [SUB.status, SUB.by, SUB.approvedAt].forEach(function (c) { if (row.value[c]) v[c] = { value: cellText(row, c) }; });   // 列がある表だけ
     v[SUB.file] = { value: ((row.value[SUB.file] && row.value[SUB.file].value) || []).map(function (f) { return { fileKey: f.fileKey }; }) };
+    if (row.value[SUB.pdf]) v[SUB.pdf] = { value: (row.value[SUB.pdf].value || []).map(function (f) { return { fileKey: f.fileKey }; }) };
     return { id: row.id, value: v };
   }
   function isoToday() { var d = new Date(); return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
@@ -409,6 +421,46 @@
       var record = res[0], cur = existingOf(record)[docName];
       var version = (cur ? cur.version : 0) + 1;
       return storeRow(record, ctx, docName, fieldText(masterRec[MF.stage]), version, buildFilename(ctx.projectName, docName, version, ext), res[1]);
+    });
+  }
+  // 書類保管の、指定した書類の最新版の行を、書き換えて保存する（change は、行の値を直接書き換える関数）
+  function updateRows(ctx, names, change) {
+    return projectRecord(ctx.projectId).then(function (record) {
+      var ex = existingOf(record), ids = {};
+      names.forEach(function (n) { if (!ex[n]) throw new Error('「' + n + '」は、まだ保存されていません'); ids[ex[n].rowId] = n; });
+      var rows = rowsOf(record).map(keepRow);
+      rows.forEach(function (r) { if (ids[r.id]) change(r, ids[r.id]); });
+      var update = {}; update[SUB.table] = { value: rows };
+      return api('PUT', '/k/v1/record', { app: appApi.getId(), id: ctx.projectId, revision: record.$revision.value, record: update }).catch(function (e) {
+        if (e && e.code === 'GAIA_CO02') throw new Error('別の人が同時に、この案件を更新しました。もう一度押してください');
+        throw e;
+      });
+    });
+  }
+  // 書類関係の承認：承認者（開いた人）と日時を、書類保管の行に残す。新しい版を作ると、承認は、外れる（新しい行には、承認がないため）
+  function approveDocs(ctx, names) {
+    var who = loginName() || '（不明）', now = new Date().toISOString();
+    return updateRows(ctx, names, function (r) {
+      r.value[SUB.status] = { value: APPROVED }; r.value[SUB.by] = { value: who }; r.value[SUB.approvedAt] = { value: now };
+    }).then(function () { return { who: who, at: now }; });
+  }
+  // PDF化：承認済みの書類を、PDF化サーバー（pdf-server/）で変換して、同じ行の「PDF」に保存する
+  function convertToPdf(ctx, name, ex) {
+    if (!PDF_SERVER_URL) return Promise.reject(new Error('PDF化サーバーが、まだ設定されていません（doc-button.js の PDF_SERVER_URL）'));
+    if (!ex.approved) return Promise.reject(new Error('承認されていない書類は、PDF化しません'));
+    var ext = extOf((ex.file && ex.file.name) || ex.filename || '');
+    return (ex.data ? Promise.resolve(ex.data) : download(ex.file.fileKey)).then(function (buf) {
+      return fetch(PDF_SERVER_URL.replace(/\/$/, '') + '/convert?ext=' + encodeURIComponent(ext), { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: buf });
+    }).then(function (r) {
+      if (!r.ok) throw new Error('PDF化に失敗しました（サーバーの返事：' + r.status + '）');
+      return r.arrayBuffer();
+    }).then(function (pdf) {
+      var head = String.fromCharCode.apply(null, new Uint8Array(pdf.slice(0, 5)));
+      if (head !== '%PDF-') throw new Error('PDFではないものが返ってきました。保存しませんでした');
+      var base = ((ex.file && ex.file.name) || ex.filename || name).replace(/\.[^.]+$/, '');
+      return upload(pdf, base + '.pdf').then(function (fileKey) {
+        return updateRows(ctx, [name], function (r) { r.value[SUB.pdf] = { value: [{ fileKey: fileKey }] }; }).then(function () { return { name: base + '.pdf', data: pdf }; });
+      });
     });
   }
   function readFile(file) {
@@ -493,6 +545,14 @@
       var batch = el('button', 'padding:6px 12px;font-size:13px;cursor:pointer;margin-bottom:8px', 'この工程をまとめて作成'); batch.type = 'button';
       var batchAll = el('button', 'padding:6px 12px;font-size:13px;cursor:pointer;margin-bottom:8px;margin-left:8px', '全工程をまとめて作成'); batchAll.type = 'button';
       bar.appendChild(batch); bar.appendChild(batchAll);
+      if (ctx.caps && ctx.caps.approval) {
+        var approveAll = el('button', 'padding:6px 12px;font-size:13px;cursor:pointer;margin-bottom:8px;margin-left:8px;font-weight:bold', '書類一式を承認'); approveAll.type = 'button';
+        approveAll.addEventListener('click', function () {
+          var names = Object.keys(existing).filter(function (n) { return !existing[n].approved; });
+          approveNames(names, '未承認の書類');
+        });
+        bar.appendChild(approveAll);
+      }
       var list = el('div'), msg = el('div', 'margin-top:8px;font-size:13px;white-space:pre-line');
       if (autoNote && targets.length) bar.appendChild(el('div', 'font-size:12px;color:#666;margin-bottom:6px', autoNote));
       body.appendChild(bar); body.appendChild(list); body.appendChild(msg);
@@ -558,6 +618,27 @@
           bar.appendChild(cancel); bar.appendChild(ok); card.appendChild(bar); cover.appendChild(card); document.body.appendChild(cover);
         });
       }
+      // 保存した最新の書類を、ダウンロードする前に確認する（外部には送りません）。指摘のリストを返す
+      function checkOne(name) {
+        var cur = existing[name];
+        return (cur.data ? Promise.resolve(cur.data) : download(cur.file.fileKey)).then(function (buf) {
+          return extractText(JSZip, buf, extOf(cur.filename || (cur.file && cur.file.name) || ''));
+        }).then(function (text) { return checkText(text, ctx.values); });
+      }
+      function approveNames(names, label) {
+        if (!names.length) { setMsg('承認する書類が、ありません', true); return; }
+        setMsg('承認の前に、書類をチェックしています…', false);
+        names.reduce(function (p, n) { return p.then(function (acc) { return checkOne(n).then(function (f) { acc[n] = f; return acc; }); }); }, Promise.resolve({})).then(function (found) {
+          var bad = names.filter(function (n) { return found[n].length; });
+          var msgText = label + '（' + names.length + '件）を、承認します。承認者：' + (loginName() || '（不明）') + '\n' +
+            (bad.length ? '\n【チェックの指摘があります】\n' + bad.map(function (n) { return '・' + n + '：' + found[n].join(' ／ '); }).join('\n') + '\n\n指摘があっても、承認しますか？' : '\nチェックの指摘は、ありません。承認しますか？');
+          if (!confirm(msgText)) { setMsg('承認は、しませんでした', false); return; }
+          return approveDocs(ctx, names).then(function (r) {
+            names.forEach(function (n) { existing[n].approved = true; existing[n].approver = r.who; existing[n].approvedAt = r.at; });
+            setMsg(names.length + '件を承認しました（' + r.who + '）', false); show();
+          });
+        }).catch(function (e) { setMsg((e && e.message) || '承認できませんでした', true); });
+      }
       function makeRow(rec) {
         var name = fieldText(rec[MF.name]), ex = existing[name];
         var ok = hasTemplate(rec), kind = kindOf(rec);
@@ -572,6 +653,11 @@
           var a = el('a', 'cursor:pointer;text-decoration:underline;color:#1a73e8', '開く'); a.setAttribute('role', 'link');
           a.addEventListener('click', function () { openStored(existing[name]).catch(function (e) { setMsg((e && e.message) || '開けませんでした', true); }); });
           state.appendChild(a);
+          if (ctx.caps && ctx.caps.approval) {
+            state.appendChild(document.createTextNode(' ・ '));
+            var ap = el('span', ex.approved ? 'color:#1f7a3d;font-weight:bold' : 'color:#a05a00', ex.approved ? '承認済み（' + ex.approver + '・' + String(ex.approvedAt).slice(0, 10) + '）' : '未承認');
+            state.appendChild(ap);
+          }
         } else state.textContent = '未作成';
         left.appendChild(state);
         var label = !ok ? '雛形が未登録' : !kind ? '確認中…' : kind === 'plain' ? '雛形を開く' : ex ? 'v' + (ex.version + 1) + ' を作成' : '作成して保存';
@@ -614,16 +700,34 @@
           var chk = el('button', 'padding:6px 10px;font-size:12px;cursor:pointer', 'チェック'); chk.type = 'button';
           chk.addEventListener('click', function () {
             chk.disabled = true; setMsg('「' + name + '」をチェックしています…', false);
-            var cur = existing[name];
-            (cur.data ? Promise.resolve(cur.data) : download(cur.file.fileKey)).then(function (buf) {
-              return extractText(JSZip, buf, extOf(cur.filename || (cur.file && cur.file.name) || ''));
-            }).then(function (text) {
-              var res = checkText(text, ctx.values);
+            checkOne(name).then(function (res) {
               chk.disabled = false;
               setMsg(res.length ? '「' + name + '」のチェック結果（' + res.length + '件）：\n・' + res.join('\n・') : '「' + name + '」：問題は見つかりませんでした', res.length > 0);
             }).catch(function (e) { chk.disabled = false; setMsg((e && e.message) || 'チェックできませんでした', true); });
           });
           right.appendChild(chk); right.appendChild(rev); right.appendChild(pick);
+          // 書類関係の承認（承認した人と日時が、書類保管の行に残る。新しい版を作ると、承認は、外れる）
+          if (ctx.caps && ctx.caps.approval && !ex.approved) {
+            var apb = el('button', 'padding:6px 10px;font-size:12px;cursor:pointer;font-weight:bold', '承認'); apb.type = 'button';
+            apb.addEventListener('click', function () { approveNames([name], '「' + name + '」v' + ex.version); });
+            right.appendChild(apb);
+          }
+          // PDF化（承認済みの書類だけ）
+          if (ctx.caps && ctx.caps.pdf && ex.approved) {
+            if (ex.pdf) {
+              var pdfOpen = el('button', 'padding:6px 10px;font-size:12px;cursor:pointer', 'PDFを開く'); pdfOpen.type = 'button';
+              pdfOpen.addEventListener('click', function () { download(ex.pdf.fileKey).then(function (buf) { saveAs(buf, ex.pdf.name); }).catch(function (e) { setMsg((e && e.message) || '開けませんでした', true); }); });
+              right.appendChild(pdfOpen);
+            } else {
+              var pdfb = el('button', 'padding:6px 10px;font-size:12px;cursor:pointer', PDF_SERVER_URL ? 'PDF化' : 'PDF化（サーバー未設定）'); pdfb.type = 'button'; pdfb.disabled = !PDF_SERVER_URL;
+              pdfb.addEventListener('click', function () {
+                pdfb.disabled = true; setMsg('PDF化しています…', false);
+                convertToPdf(ctx, name, existing[name]).then(function (r) { existing[name].pdf = { fileKey: null, name: r.name }; saveAs(r.data, r.name); setMsg('PDFを保存しました：' + r.name + '（画面を開き直すと、「PDFを開く」になります）', false); })
+                  .catch(function (e) { pdfb.disabled = false; setMsg((e && e.message) || 'PDF化できませんでした', true); });
+              });
+              right.appendChild(pdfb);
+            }
+          }
         }
         row.appendChild(left); row.appendChild(right);
         return row;
@@ -721,10 +825,12 @@
     floatingButton('書類を作る', space, function () {
       loadLabelMap(record).then(function (lm) {
         var values = buildValues(record, lm);
+        var tbl = lm.props && lm.props[SUB.table], tf = (tbl && tbl.fields) || {};
+        var caps = { approval: !!(tf[SUB.status] && tf[SUB.by] && tf[SUB.approvedAt]), pdf: !!tf[SUB.pdf] };   // 表に、その列があるときだけ、承認・PDF化を出す
         var projectName = '';
         NAME_LABELS.some(function (l) { if (values[l]) { projectName = values[l]; return true; } return false; });
         openPanel({
-          values: values, projectId: projectId, projectName: projectName || ('案件' + projectId),
+          values: values, caps: caps, projectId: projectId, projectName: projectName || ('案件' + projectId),
           currentStage: values[STAGE_LABEL] || '', target: TARGET_LABEL ? values[TARGET_LABEL] || '' : '', guessedTarget: guessTarget(projectName)
         });
       });

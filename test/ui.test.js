@@ -20,7 +20,8 @@ const FAKE_KINTONE = `
     c_name: { type: 'SINGLE_LINE_TEXT', code: 'c_name', label: '案件名' },
     c_addr: { type: 'SINGLE_LINE_TEXT', code: 'c_addr', label: '現場住所' },
     c_amount: { type: 'NUMBER', code: 'c_amount', label: '金額', digit: true },
-    c_no: { type: 'NUMBER', code: 'c_no', label: '案件番号' }
+    c_no: { type: 'NUMBER', code: 'c_no', label: '案件番号' },
+    書類保管: { type: 'SUBTABLE', code: '書類保管', fields: { 書類保管_書類名: {}, 書類保管_工程: {}, 書類保管_版: {}, 書類保管_作成日: {}, 書類保管_ファイル: {}, 書類保管_承認状況: {}, 書類保管_承認者: {}, 書類保管_承認日時: {}, 書類保管_PDF: {} } }
   };
   function q(params) { var o = []; Object.keys(params || {}).forEach(function (k) { var v = params[k]; if (Array.isArray(v)) v.forEach(function (x, i) { o.push(encodeURIComponent(k + '[' + i + ']') + '=' + encodeURIComponent(x)); }); else if (v != null) o.push(encodeURIComponent(k) + '=' + encodeURIComponent(v)); }); return o.join('&'); }
   function api(url, method, params) {
@@ -553,5 +554,85 @@ test('画面：議事録の全項目（作成者の初期値・出席者は空�
     await page.locator('div[style*="border-top"]', { hasText: '議事録' }).getByRole('button', { name: 'チェック' }).click();
     await page.getByText(/チェック結果.*置き換えられていない項目が残っています：\{\{存在しない場所\}\}/s).waitFor();
     assert.deepStrictEqual(errors, []);
+  } finally { await browser.close(); await mock.close(); }
+});
+
+test('画面：書類関係の承認（承認者と日時が残る）。新しい版を作ると、承認は外れる。一式承認もできる', { skip }, async () => {
+  const mock = createMock(); const url = await mock.listen();
+  const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
+  try {
+    await seed(mock);
+    const { page, errors } = await openPage(browser, url, '/__page');
+    const dialogs = []; page.on('dialog', (d) => dialogs.push(d.message()));
+    await page.locator('[data-doc-hub]').click();
+    await page.getByText('工程別の書類：').waitFor();
+    await page.locator('select').nth(0).selectOption('打合せ・見積・提案');
+    await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: '作成して保存' }).click()]);
+    await page.getByText(/_v1\.docx/).waitFor();
+    await page.reload(); await page.evaluate((r) => window.__fire(r), RECORD);
+    await page.locator('[data-doc-hub]').click();
+    await page.locator('select').nth(0).selectOption('打合せ・見積・提案');
+    await page.getByText('未承認').waitFor();
+    await page.locator('div[style*="border-top"]', { hasText: '打合せ議事次第' }).getByRole('button', { name: '承認', exact: true }).click();
+    await page.getByText(/1件を承認しました/).waitFor();
+    assert.ok(dialogs.some((m) => /承認します/.test(m) && /置き換えられていない|チェックの指摘/.test(m)), '承認の前に、チェックの結果を見せる：' + dialogs.join('|'));
+    const row = mock.state.records['575'][0]['書類保管'].value[0].value;
+    assert.strictEqual(row['書類保管_承認状況'].value, '承認済み');
+    assert.ok(row['書類保管_承認者'].value && /^\d{4}-\d{2}-\d{2}T/.test(row['書類保管_承認日時'].value), '承認者と日時が残る');
+    assert.strictEqual(row['書類保管_ファイル'].value.length, 1, '承認しても、ファイルは消えない');
+    await page.getByText(/承認済み（/).waitFor();
+    // 新しい版（v2）を作ると、v2 は未承認（v1 の承認は残る）
+    await page.getByRole('button', { name: 'v2 を作成' }).click();
+    await page.getByText(/_v2\.docx/).waitFor();
+    const rows = mock.state.records['575'][0]['書類保管'].value;
+    assert.strictEqual(rows.length, 2);
+    assert.strictEqual(rows[0].value['書類保管_承認状況'].value, '承認済み', 'v1 の承認は残る');
+    assert.ok(!rows[1].value['書類保管_承認状況'] || rows[1].value['書類保管_承認状況'].value === '', 'v2 は未承認');
+    assert.deepStrictEqual(errors, []);
+  } finally { await browser.close(); await mock.close(); }
+});
+
+test('画面：PDF化は、承認済みの書類だけ。サーバー未設定のあいだは押せない。PDFが返ったら、同じ行に保存する', { skip }, async () => {
+  const mock = createMock(); const url = await mock.listen();
+  const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
+  try {
+    await seed(mock);
+    const ctx = await browser.newContext(); const page = await ctx.newPage();
+    const errors = []; page.on('pageerror', (e) => errors.push(e.message));
+    let withServer = false;
+    await page.route('**/__lib/doc-button.js', async (route) => {
+      let src = fs.readFileSync(require('path').join(__dirname, '..', 'customize', 'doc-button.js'), 'utf8');
+      if (withServer) src = src.replace("var PDF_SERVER_URL = '';", "var PDF_SERVER_URL = '" + url + "';");
+      await route.fulfill({ status: 200, contentType: 'text/javascript; charset=utf-8', body: src });
+    });
+    page.on('dialog', (d) => d.accept());
+    await page.addInitScript(FAKE_KINTONE);
+    const open = async () => {
+      await page.goto(url + '/__page'); await page.evaluate((r) => window.__fire(r), RECORD);
+      await page.locator('[data-doc-hub]').click(); await page.getByText('工程別の書類：').waitFor();
+      await page.locator('select').nth(0).selectOption('打合せ・見積・提案');
+    };
+    await open();
+    await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: '作成して保存' }).click()]);
+    await page.getByText(/_v1\.docx/).waitFor();
+    await open();
+    // 未承認の書類には、PDF化がない
+    assert.strictEqual(await page.getByRole('button', { name: /PDF化/ }).count(), 0, '承認前は、PDF化を出さない');
+    await page.locator('div[style*="border-top"]', { hasText: '打合せ議事次第' }).getByRole('button', { name: '承認', exact: true }).click();
+    await page.getByText(/1件を承認しました/).waitFor();
+    // サーバー未設定：押せない
+    assert.strictEqual(await page.getByRole('button', { name: 'PDF化（サーバー未設定）' }).isDisabled(), true);
+    // サーバーを設定して開き直す → PDF化 → 同じ行に保存
+    withServer = true; await open();
+    const [dl] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'PDF化', exact: true }).click()]);
+    await page.getByText(/PDFを保存しました/).waitFor();
+    const row = mock.state.records['575'][0]['書類保管'].value[0].value;
+    const pdf = row['書類保管_PDF'].value[0];
+    assert.match(pdf.name, /_打合せ議事次第_v1\.pdf$/);
+    assert.ok(mock.state.files[pdf.fileKey].buf.slice(0, 5).toString() === '%PDF-', 'PDFが保存される');
+    assert.strictEqual(row['書類保管_承認状況'].value, '承認済み', 'PDF化しても、承認は残る');
+    assert.strictEqual(row['書類保管_ファイル'].value.length, 1, '元のWordも残る');
+    assert.deepStrictEqual(errors, []);
+    await ctx.close();
   } finally { await browser.close(); await mock.close(); }
 });

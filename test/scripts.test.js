@@ -245,3 +245,31 @@ test('template-tool：list／get／put（確認だけは変えない・差し替
     assert.strictEqual(r.code, 1, r.out);
   });
 });
+
+test('add-approval-fields：表がなければ止まる／確認だけは変えない／足すと列が増え既存は残る／2回目は何もしない', async () => {
+  await withMock(async (mock, env) => {
+    mock.addApp('575', '案件くん', { fields: { c_name: { type: 'SINGLE_LINE_TEXT', code: 'c_name', label: '案件名' } } });
+    mock.state.apps['575'].previewFields = JSON.parse(JSON.stringify(mock.state.apps['575'].fields));
+    let r = await run('add-approval-fields.js', [], env);
+    assert.strictEqual(r.code, 2, r.out); assert.match(r.out, /見つかりません/);
+    // 書類保管の表がある状態にする（add-doc-storage と同じ手順）
+    const backupDir = env.KINTONE_BACKUP_DIR;
+    r = await run('backup-app.js', ['575'], env); assert.strictEqual(r.code, 0, r.out);
+    r = await run('add-doc-storage.js', ['--yes'], env); assert.strictEqual(r.code, 0, r.out);
+    mock.state.apps['575'].previewFields = JSON.parse(JSON.stringify(mock.state.apps['575'].fields));
+    r = await run('add-approval-fields.js', [], env);
+    assert.strictEqual(r.code, 0, r.out); assert.match(r.out, /確認だけです/); assert.match(r.out, /承認状況/);
+    assert.strictEqual(Object.keys(mock.state.apps['575'].fields['書類保管'].fields).length, 5, '確認だけでは変わらない');
+    fs.rmSync(backupDir, { recursive: true, force: true }); fs.mkdirSync(backupDir);
+    r = await run('add-approval-fields.js', ['--yes'], env);
+    assert.strictEqual(r.code, 2, r.out); assert.match(r.out, /バックアップがありません/);
+    r = await run('backup-app.js', ['575'], env); assert.strictEqual(r.code, 0, r.out);
+    r = await run('add-approval-fields.js', ['--yes'], env);
+    assert.strictEqual(r.code, 0, r.out); assert.match(r.out, /OK 列を足しました（5 → 9列/);
+    const cols = Object.keys(mock.state.apps['575'].fields['書類保管'].fields);
+    assert.deepStrictEqual(cols, ['書類保管_書類名', '書類保管_工程', '書類保管_版', '書類保管_作成日', '書類保管_ファイル', '書類保管_承認状況', '書類保管_承認者', '書類保管_承認日時', '書類保管_PDF']);
+    mock.state.apps['575'].previewFields = JSON.parse(JSON.stringify(mock.state.apps['575'].fields));
+    r = await run('add-approval-fields.js', ['--yes'], env);
+    assert.strictEqual(r.code, 0, r.out); assert.match(r.out, /すでにあります/);
+  });
+});

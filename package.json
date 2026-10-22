@@ -10,6 +10,7 @@
     "backup": "node scripts/backup-app.js",
     "add-doc-storage": "node scripts/add-doc-storage.js",
     "add-button-space": "node scripts/add-button-space.js",
+    "add-approval-fields": "node scripts/add-approval-fields.js",
     "template": "node scripts/template-tool.js",
     "apply-customize": "node scripts/apply-customize.js",
     "make-test-templates": "node scripts/make-test-templates.js",

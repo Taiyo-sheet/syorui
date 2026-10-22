@@ -40,6 +40,7 @@ function createMock() {
     if (req.method === 'GET' && p === '/__lib/jszip.min.js') { res.writeHead(200, { 'Content-Type': 'text/javascript' }); return res.end(fs.readFileSync(path.join(__dirname, '..', 'node_modules', 'jszip', 'dist', 'jszip.min.js'))); }
     if (req.method === 'GET' && p === '/__lib/taiyo-open-app.js') { res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }); return res.end(fs.readFileSync(path.join(__dirname, '..', 'customize', 'taiyo-open-app.js'))); }
     if (req.method === 'GET' && p === '/__lib/round-buttons.js') { res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }); return res.end(fs.readFileSync(path.join(__dirname, '..', 'customize', 'round-buttons.js'))); }
+    if (req.method === 'POST' && p === '/convert') { const buf = Buffer.concat(chunks); res.writeHead(200, { 'Content-Type': 'application/pdf' }); return res.end(Buffer.concat([Buffer.from('%PDF-1.4\n% fake of ' + (u.searchParams.get('ext') || '') + ' ' + buf.length + '\n'), Buffer.alloc(0)])); }
     if (req.method === 'GET' && p === '/__lib/doc-button.js') { res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }); return res.end(fs.readFileSync(path.join(__dirname, '..', 'customize', 'doc-button.js'))); }
     if (!req.headers['x-cybozu-authorization'] && !req.headers['x-requested-with'] && !req.headers['content-type']) return send(401, { code: 'CB_AU01', message: 'no auth' });
     if (!req.headers['x-cybozu-authorization'] && !req.headers['x-requested-with'] && !(req.headers['content-type'] || '').includes('json')) return send(401, { code: 'CB_AU01', message: 'no auth' });
@@ -55,7 +56,11 @@ function createMock() {
       }
       if (req.method === 'GET' && p === '/k/v1/app') { const a = appOf(q.id); return a ? send(200, { appId: a.appId, name: a.name, spaceId: a.spaceId }) : send(404, { message: 'app' }); }
       if (req.method === 'POST' && p === '/k/v1/preview/app') { const id = String(s.nextApp++); addApp(id, body.name, { spaceId: String(body.space) }); return send(200, { app: id, revision: '1' }); }
-      if (req.method === 'POST' && p === '/k/v1/preview/app/form/fields') { Object.assign(appOf(body.app).previewFields, body.properties); return send(200, { revision: '2' }); }
+      if (req.method === 'POST' && p === '/k/v1/preview/app/form/fields') {
+        const pf = appOf(body.app).previewFields;
+        Object.keys(body.properties).forEach((c) => { const nw = body.properties[c]; if (nw.type === 'SUBTABLE' && pf[c] && pf[c].type === 'SUBTABLE') pf[c] = Object.assign({}, pf[c], { fields: Object.assign({}, pf[c].fields, nw.fields) }); else pf[c] = nw; });
+        return send(200, { revision: '2' });
+      }
       if (req.method === 'POST' && p === '/k/v1/preview/app/deploy') { body.apps.forEach((x) => { const a = appOf(x.app); a.fields = Object.assign({}, a.fields, a.previewFields); }); return send(200, {}); }
       if (req.method === 'GET' && p === '/k/v1/preview/app/deploy') return send(200, { apps: q['apps[0]'] ? [{ app: q['apps[0]'], status: 'SUCCESS' }] : [] });
       if (req.method === 'GET' && p === '/k/v1/app/form/fields') return send(200, { properties: appOf(q.app).fields, revision: '1' });
