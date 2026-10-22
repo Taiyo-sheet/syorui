@@ -793,6 +793,34 @@
   // 画面の右下に浮かぶ丸いボタン。マウスを近づけると（スマートフォンでは、押すと）、文字つきに広がる。
   // ボタン用スペース（書類関係タブの中）があれば、そのタブを開いている間だけ見える。なければ、いつでも見える
   var FAB_SIZE = 52;
+  // 「タブ表示」プラグインのタブの名前。そのタブが選ばれている（色が違う）間は、書類保管の表が、そのタブに入っていなくても、ボタンを見せる
+  var TAB_NAME = '書類関係';
+  function bgOf(el) {
+    for (var i = 0; el && i < 4; i++, el = el.parentElement) {
+      var c = getComputedStyle(el).backgroundColor;
+      if (c && c !== 'transparent' && !/rgba\(\s*0,\s*0,\s*0,\s*0\s*\)/.test(c)) return c;
+    }
+    return '';
+  }
+  function leafByText(text) {
+    var all = document.querySelectorAll('div,span,td,th,li,a,button,p');
+    for (var i = 0; i < all.length; i++) { if (!all[i].children.length && all[i].textContent.trim() === text) return all[i]; }
+    return null;
+  }
+  // タブの名前が TAB_NAME のものが、選ばれているか（ほかのタブの色と違えば、選ばれている）。タブが見つからなければ、false
+  function tabActive() {
+    try {
+      var me = leafByText(TAB_NAME); if (!me) return false;
+      var mine = bgOf(me), others = 0, same = 0;
+      var row = me.parentElement; for (var i = 0; row && i < 3; i++, row = row.parentElement) { if (row.textContent.indexOf('工事部') >= 0 && row.textContent.indexOf('施工店') >= 0) break; }
+      if (!row) return false;
+      Array.prototype.forEach.call(row.querySelectorAll('div,span,td,th,li,a,button'), function (e) {
+        if (e.children.length || e === me || !e.textContent.trim()) return;
+        others++; if (bgOf(e) === mine) same++;
+      });
+      return others > 1 && same < others / 2;
+    } catch (e) { return false; }
+  }
   function floatingButton(label, space, onClick) {
     var old = document.querySelector('[data-doc-hub]'); if (old && old.parentNode) old.parentNode.removeChild(old);
     var fab = el('button', 'position:fixed;right:16px;bottom:96px;z-index:9999;height:' + FAB_SIZE + 'px;min-width:' + FAB_SIZE + 'px;border:0;border-radius:' + (FAB_SIZE / 2) + 'px;background:#0b5fb8;color:#fff;box-shadow:0 4px 12px rgba(0,0,0,.35);cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0 14px;font-size:14px;font-weight:bold;overflow:hidden;white-space:nowrap');
@@ -808,7 +836,7 @@
     document.body.appendChild(fab);
     // 書類関係タブを開いている間だけ見せる（タブを閉じると、スペースが隠れる）
     if (space) {
-      var sync = function () { fab.style.display = space.offsetParent !== null ? 'flex' : 'none'; };
+      var sync = function () { fab.style.display = (space.offsetParent !== null || tabActive()) ? 'flex' : 'none'; };
       sync(); var timer = setInterval(function () { if (!document.body.contains(fab)) { clearInterval(timer); return; } sync(); }, 400);
     }
     return fab;

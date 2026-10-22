@@ -636,3 +636,29 @@ test('画面：PDF化は、承認済みの書類だけ。サーバー未設定�
     await ctx.close();
   } finally { await browser.close(); await mock.close(); }
 });
+
+test('画面：書類保管の表がタブに入っていなくても、「書類関係」タブが選ばれている間は、ボタンが見える（タブの色で判断）', { skip }, async () => {
+  const mock = createMock(); const url = await mock.listen();
+  const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
+  try {
+    await seed(mock);
+    const ctx = await browser.newContext(); const page = await ctx.newPage();
+    const errors = []; page.on('pageerror', (e) => errors.push(e.message));
+    await page.addInitScript(FAKE_KINTONE);
+    await page.goto(url + '/__page');
+    await page.evaluate(() => {
+      var t = document.createElement('div'); t.id = 'tabtable'; t.style.display = 'none'; document.body.appendChild(t);   // 表は、どのタブにも入っていなくて、隠れている
+      var bar = document.createElement('div'); bar.id = 'tabs';
+      ['営業部', '工事部', '書類関係', '施工店'].forEach(function (n) { var d = document.createElement('div'); d.textContent = n; d.style.cssText = 'display:inline-block;padding:6px 10px;background:rgb(200,200,200)'; bar.appendChild(d); });
+      document.body.appendChild(bar);
+    });
+    await page.evaluate((r) => window.__fire(r), RECORD);
+    const fab = page.locator('[data-doc-hub]');
+    await page.waitForFunction(() => document.querySelector('[data-doc-hub]').style.display === 'none');   // 選ばれていない間は、出ない
+    await page.evaluate(() => { [].forEach.call(document.querySelectorAll('#tabs div'), function (d) { if (d.textContent === '書類関係') d.style.background = 'rgb(52,152,219)'; }); });
+    await page.waitForFunction(() => document.querySelector('[data-doc-hub]').style.display === 'flex');   // 選ばれると、出る
+    await fab.click(); await page.getByText('工程別の書類：').waitFor();
+    assert.deepStrictEqual(errors, []);
+    await ctx.close();
+  } finally { await browser.close(); await mock.close(); }
+});
