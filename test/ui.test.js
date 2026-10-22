@@ -31,7 +31,7 @@ const FAKE_KINTONE = `
   api.url = function (p) { return p + '.json'; };
   var handlers = [];
   var header = function () { return document.getElementById('hdr'); };
-  var rec = function () { return { getId: function () { return 1; }, getHeaderMenuSpaceElement: header, getSpaceElement: function (id) { return id === 'doc_button_space' ? document.getElementById('tabspace') : null; } }; };
+  var rec = function () { return { getId: function () { return 1; }, getHeaderMenuSpaceElement: header, getSpaceElement: function (id) { return id === 'doc_button_space' ? document.getElementById('tabspace') : null; }, getFieldElement: function (c) { return c === '書類保管' ? document.getElementById('tabtable') : null; } }; };
   window.kintone = {
     api: api,
     getRequestToken: function () { return 'tok'; },
@@ -332,6 +332,23 @@ test('画面：右下の丸いボタン。近づけると文字つきに広が�
     await fab.click();
     await page.getByText('工程別の書類：').waitFor();
     assert.deepStrictEqual(errors, []);
+    await ctx.close();
+  } finally { await browser.close(); await mock.close(); }
+});
+
+test('画面：「書類保管」の表が見えている間だけ、右下のボタンも見える（表が優先。表が見つからなければ、スペース）', { skip }, async () => {
+  const mock = createMock(); const url = await mock.listen();
+  const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
+  try {
+    await seed(mock);
+    const ctx = await browser.newContext(); const page = await ctx.newPage();
+    await page.addInitScript(FAKE_KINTONE);
+    await page.goto(url + '/__page');
+    await page.evaluate(() => { var t = document.createElement('div'); t.id = 'tabtable'; t.style.height = '20px'; document.body.appendChild(t); var s = document.createElement('div'); s.id = 'tabspace'; s.style.display = 'none'; document.body.appendChild(s); });
+    await page.evaluate((r) => window.__fire(r), RECORD);
+    assert.strictEqual(await page.locator('[data-doc-hub]').isVisible(), true, '表が見えていれば、スペースが隠れていても出る');
+    await page.evaluate(() => { document.getElementById('tabtable').style.display = 'none'; });
+    await page.waitForFunction(() => document.querySelector('[data-doc-hub]').style.display === 'none');
     await ctx.close();
   } finally { await browser.close(); await mock.close(); }
 });

@@ -712,8 +712,11 @@
 
   function onShow(event) {
     if (typeof JSZip === 'undefined') { console.error('JSZipが読み込まれていません。JavaScriptの読み込み順を確認してください。'); return event; }
+    // ボタンを見せる目印：「書類保管」の表（書類関係タブの中にある項目）。表が見えている間だけ、ボタンも見える。
+    // 表が見つからなければ、ボタン用スペース、それもなければ、いつでも見せる
     var space = null;
-    try { space = recApi.getSpaceElement(BUTTON_SPACE_ID); } catch (e) { space = null; }
+    try { space = recApi.getFieldElement(SUB.table); } catch (e) { space = null; }
+    if (!space) { try { space = recApi.getSpaceElement(BUTTON_SPACE_ID); } catch (e) { space = null; } }
     var record = event.record, projectId = recApi.getId();
     floatingButton('書類を作る', space, function () {
       loadLabelMap(record).then(function (lm) {
