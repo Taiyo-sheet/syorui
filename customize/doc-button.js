@@ -810,6 +810,63 @@
     return fab;
   }
 
+  // ---------- 「書類関係」タブの、すぐ下に置くボタン ----------
+  // 「タブ表示」プラグインが、どの項目を、どのタブに入れているかに、頼りません。タブの並び（タブ名）を見つけて、
+  // 「書類関係」のタブが選ばれている間だけ、その並びの、すぐ下に、ボタンを出します
+  var TAB_NAMES = ['書類関係'];
+  function bgOf(el) {
+    for (var i = 0; el && i < 4; i++, el = el.parentElement) {
+      var c = getComputedStyle(el).backgroundColor;
+      if (c && c !== 'transparent' && !/rgba\(\s*0,\s*0,\s*0,\s*0\s*\)/.test(c)) return c;
+    }
+    return '';
+  }
+  function leafByText(text) {
+    var all = document.querySelectorAll('div,span,td,th,li,a,button,p');
+    for (var i = 0; i < all.length; i++) { if (!all[i].children.length && all[i].textContent.trim() === text) return all[i]; }
+    return null;
+  }
+  function leavesOf(row) {
+    return Array.prototype.filter.call(row.querySelectorAll('div,span,td,th,li,a,button'), function (e) { return !e.children.length && e.textContent.trim(); });
+  }
+  // タブの並びを探す：「書類関係」の文字を持つ要素と、その並び全体（「工事部」「施工店」も入っている、いちばん内側の枠）
+  function findTabBar() {
+    for (var n = 0; n < TAB_NAMES.length; n++) {
+      var me = leafByText(TAB_NAMES[n]); if (!me) continue;
+      var row = me.parentElement;
+      for (var i = 0; row && i < 5; i++, row = row.parentElement) {
+        var t = row.textContent;
+        if (t.indexOf('工事部') >= 0 && t.indexOf('施工店') >= 0 && leavesOf(row).length >= 5) return { me: me, row: row };
+      }
+    }
+    return null;
+  }
+  // そのタブが、選ばれているか：ほかのタブと、見た目（背景色・文字の色・太さ）が違うものが、選ばれているタブ。
+  // 見た目に差がなく、見分けられないときは、選ばれているものとして、扱う（ボタンが、出なくなるのを、避けるため）
+  function tabIsActive(bar) {
+    try {
+      var sig = function (e) { var cs = getComputedStyle(e); return bgOf(e) + '|' + cs.color + '|' + cs.fontWeight; };
+      var mine = sig(bar.me), others = leavesOf(bar.row).filter(function (e) { return e !== bar.me && !e.contains(bar.me) && !bar.me.contains(e); });
+      if (others.length < 2) return true;
+      var same = others.filter(function (e) { return sig(e) === mine; }).length;
+      var kinds = {}; others.forEach(function (e) { kinds[sig(e)] = 1; });
+      if (Object.keys(kinds).length === 1 && same === others.length) return true;   // 全部同じ見た目：見分けられない
+      return same < others.length / 2;
+    } catch (e) { return true; }
+  }
+  function tabBarButton(label, bar, onClick) {
+    var olds = document.querySelectorAll('[data-doc-hub]'); Array.prototype.forEach.call(olds, function (o) { if (o.parentNode) o.parentNode.removeChild(o); });
+    var wrap = el('div', 'padding:8px 0 4px');
+    wrap.setAttribute('data-doc-hub', '1');
+    var b = el('button', 'padding:10px 18px;font-size:15px;font-weight:bold;cursor:pointer;background:#0b5fb8;color:#fff;border:0;border-radius:6px;box-shadow:0 2px 6px rgba(0,0,0,.25)', '📄 ' + label);
+    b.type = 'button'; b.addEventListener('click', onClick);
+    wrap.appendChild(b);
+    bar.row.parentNode.insertBefore(wrap, bar.row.nextSibling);
+    var sync = function () { wrap.style.display = tabIsActive(bar) ? 'block' : 'none'; };
+    sync(); var timer = setInterval(function () { if (!document.body.contains(wrap) || !document.body.contains(bar.me)) { clearInterval(timer); return; } sync(); }, 400);
+    return wrap;
+  }
+
   // 書類関係タブの中（登録画面の、いちばん上）に置くボタン。目印の項目（ANCHOR_FIELD）の行の、すぐ上に入れる。
   // 目印が見えている間（＝書類関係タブを開いている間）だけ見える。目印が見つからなければ、null を返す
   var ANCHOR_FIELD = '安全書類格納完了チェック';   // 案件くんの、書類関係タブの中にある項目（フィールドコード。案件くんのレイアウトで確認済み）
@@ -834,7 +891,20 @@
     var record = event.record, projectId = recApi.getId();
     var anchor = null;
     try { anchor = recApi.getFieldElement(ANCHOR_FIELD); } catch (e) { anchor = null; }
-    var place = function (label, onClick) { return (anchor && inlineButton(label, anchor, onClick)) || floatingButton(label, onClick); };   // 書類関係タブの中に置く。置けなければ、右下の丸いボタン
+    // 置き場所の順番：①タブの並びの、すぐ下（書類関係タブが選ばれている間だけ）→ ②目印の項目の、すぐ上 → ③右下の丸いボタン（いつでも）
+    var place = function (label, onClick) {
+      var bar = findTabBar();
+      if (bar) { tabBarButton(label, bar, onClick); return; }
+      // タブの並びが、まだ見つからない：先に、予備（②→③）を出しておき、あとでタブの並びが見つかったら、そちらに移す（約6秒、探す）
+      var tries = 0;
+      if (!(anchor && inlineButton(label, anchor, onClick))) floatingButton(label, onClick);
+      var again = function () {
+        var b2 = findTabBar();
+        if (b2) { tabBarButton(label, b2, onClick); return; }
+        if (++tries < 20) setTimeout(again, 300);
+      };
+      setTimeout(again, 300);
+    };
     place('書類を作る', function () {
       loadLabelMap(record).then(function (lm) {
         var values = buildValues(record, lm);

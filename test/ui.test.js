@@ -647,3 +647,58 @@ test('画面：目印の項目の枠の呼び名が違っても（row-gaia が�
     await ctx.close();
   } finally { await browser.close(); await mock.close(); }
 });
+
+// タブの並びの、疑似の画面（PC：背景色で区別／スマホ：文字の色と太さで区別）を作る
+const TABBAR = (kind, active) => `
+  var bar = document.createElement('div'); bar.id = 'tabs';
+  ['営業部', '工事部', '書類関係', '施工店', '請求入金'].forEach(function (n) {
+    var d = document.createElement('div'); d.textContent = n; d.setAttribute('data-tab', n);
+    d.style.cssText = ${kind === 'pc'} ? 'display:inline-block;padding:6px 10px;background:rgb(200,200,200);color:rgb(80,80,80)' : 'display:inline-block;padding:6px 10px;color:rgb(90,90,90);font-weight:400';
+    bar.appendChild(d);
+  });
+  document.body.appendChild(bar);
+  window.__select = function (name) { [].forEach.call(document.querySelectorAll('#tabs div'), function (d) {
+    var on = d.getAttribute('data-tab') === name;
+    if (${kind === 'pc'}) d.style.background = on ? 'rgb(52,152,219)' : 'rgb(200,200,200)'; else { d.style.color = on ? 'rgb(0,90,180)' : 'rgb(90,90,90)'; d.style.fontWeight = on ? '700' : '400'; } }); };
+  window.__select(${JSON.stringify(active)});
+`;
+
+for (const kind of ['pc', 'mobile']) {
+  test('画面（' + (kind === 'pc' ? 'PC：色' : 'スマホ：文字の太さと色') + '）：「書類関係」タブが選ばれている間だけ、タブの並びの、すぐ下にボタンが出る。ほかのタブ（施工店など）では隠れる', { skip }, async () => {
+    const mock = createMock(); const url = await mock.listen();
+    const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
+    try {
+      await seed(mock);
+      const ctx = await browser.newContext(); const page = await ctx.newPage();
+      const errors = []; page.on('pageerror', (e) => errors.push(e.message));
+      await page.addInitScript(FAKE_KINTONE);
+      await page.goto(url + '/__page');
+      await page.evaluate(new Function(TABBAR(kind, '施工店')));   // 施工店のタブが選ばれている
+      await page.evaluate((r) => window.__fire(r), RECORD);
+      const btn = page.locator('[data-doc-hub]');
+      await page.waitForFunction(() => { var b = document.querySelector('[data-doc-hub]'); return b && document.getElementById('tabs').nextElementSibling === b; });
+      assert.strictEqual(await page.locator('body > [data-doc-hub]').count(), 1, '予備の右下のボタンは出ない');
+      await page.waitForFunction(() => document.querySelector('[data-doc-hub]').style.display === 'none');   // 施工店では、隠れる
+      await page.evaluate(() => window.__select('書類関係'));
+      await page.waitForFunction(() => document.querySelector('[data-doc-hub]').style.display === 'block');   // 書類関係で、出る
+      await btn.getByRole('button').click(); await page.getByText('工程別の書類：').waitFor();
+      assert.deepStrictEqual(errors, []);
+      await ctx.close();
+    } finally { await browser.close(); await mock.close(); }
+  });
+}
+
+test('画面：タブの見た目に差がなく、選ばれているタブが見分けられなくても、ボタンは出る（出なくなるのを避ける）', { skip }, async () => {
+  const mock = createMock(); const url = await mock.listen();
+  const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
+  try {
+    await seed(mock);
+    const ctx = await browser.newContext(); const page = await ctx.newPage();
+    await page.addInitScript(FAKE_KINTONE);
+    await page.goto(url + '/__page');
+    await page.evaluate(() => { var bar = document.createElement('div'); bar.id = 'tabs'; ['営業部', '工事部', '書類関係', '施工店', '請求入金'].forEach(function (n) { var d = document.createElement('div'); d.textContent = n; bar.appendChild(d); }); document.body.appendChild(bar); });
+    await page.evaluate((r) => window.__fire(r), RECORD);
+    await page.waitForFunction(() => { var b = document.querySelector('[data-doc-hub]'); return b && b.style.display !== 'none'; });
+    await ctx.close();
+  } finally { await browser.close(); await mock.close(); }
+});
