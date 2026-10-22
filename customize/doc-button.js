@@ -142,19 +142,65 @@
   function hasPlaceholders(JSZipLib, buf, ext) {
     return listPlaceholders(JSZipLib, buf, ext).then(function (l) { return l.length > 0; });
   }
-  // 議事録など、作成のときに入力してもらう項目（雛形に {{打合せ日}} {{議事録メモ}} などと書くと、入力欄が出る）
+  // 議事録など、作成のときに入力してもらう項目（雛形に {{打合せ日}} {{議事録メモ}} などと書くと、その入力欄が出る）
+  //   blank：入力されなかったときに入れる言葉（なければ、空のまま入れて、作成後に知らせる）
+  //   init ：入力欄の初めの値（関数なら、開いたときに決める）
+  function loginName() { try { return kintone.getLoginUser().name || ''; } catch (e) { return ''; } }
   var ASK = [
-    { key: '打合せ日', label: '打合せ日', type: 'date' },
+    { key: '打合せ日', label: '打合せ日（初期値は今日）', type: 'date', blank: function () { return today(); } },
     { key: '場所', label: '場所', type: 'text' },
-    { key: '出席者', label: '出席者', type: 'text' },
-    { key: '議題', label: '議題', type: 'text' },
-    { key: '議事録メモ', label: 'メモ（箇条書き。1行に1項目）', type: 'memo' }
+    { key: '出席者', label: '出席者（分からなければ空のまま→「不明」）', type: 'text', blank: '不明' },
+    { key: '作成者', label: '作成者（初期値は、開いた人）', type: 'text', init: function () { return loginName() || 'くに'; }, blank: function () { return loginName() || 'くに'; } },
+    { key: '議題', label: '議題（箇条書き。1行に1項目）', type: 'memo', blank: 'なし' },
+    { key: '議事録メモ', label: '打合せ内容（箇条書き。1行に1項目）', type: 'memo', blank: 'なし' },
+    { key: '決定事項', label: '決定事項（箇条書き。1行に1項目）', type: 'memo', blank: 'なし' },
+    { key: 'ToDo', label: 'ToDo（いつまでに・誰が・何を。1行に1つ）', type: 'memo', blank: 'なし' },
+    { key: '次回予定', label: '次回予定（あれば。「次回は〇月〇日」など）', type: 'text', blank: 'なし' }
   ];
+  function askDefault(a) { return typeof a.blank === 'function' ? a.blank() : (a.blank || ''); }
   // 箇条書きの記号（- * ● • ・）をそろえる。空行は取り除く
   function tidyMemo(t) {
     return String(t || '').split(/\r?\n/).map(function (l) { return l.trim(); }).filter(Boolean)
       .map(function (l) { return l.replace(/^[-*●•・‣]\s*/, '・'); }).join('\n');
   }
+  // 書類の文字を取り出す（docx・xlsx・pptx）。段落・セルの区切りは、改行にする
+  function extractText(JSZipLib, buf, ext) {
+    if (!OFFICE[ext]) return Promise.resolve('');
+    return JSZipLib.loadAsync(buf).then(function (zip) {
+      var names = Object.keys(zip.files).filter(function (n) { return TARGET.test(n); });
+      return Promise.all(names.map(function (n) {
+        return zip.file(n).async('string').then(function (x) {
+          return decodeLabel(x.replace(/<\/(w:p|a:p|si|row|w:tr)>/g, '\n').replace(/<[^>]*>/g, ''));
+        });
+      })).then(function (r) { return r.join('\n'); });
+    });
+  }
+  // 書類のチェック（外部には送らず、この画面の中だけで行う）。指摘のリストを返す（なければ空）
+  //   values：案件くんの値（項目名 → 値）。書類の「工事名称：〇〇」が、案件くんの値と違えば、指摘する
+  var CHECK_LABELS = ['工事名称', '工事場所'];
+  function checkText(text, values) {
+    var out = [], t = String(text || '');
+    var left = (t.match(/\{\{[^{}]+\}\}/g) || []).filter(function (x, i, a) { return a.indexOf(x) === i; });
+    if (left.length) out.push('置き換えられていない項目が残っています：' + left.join(' '));
+    // 「■ 工事場所：」のあとが、空のまま
+    var blanks = [];
+    t.split('\n').forEach(function (l) {
+      var m = l.match(/^[\s■●◆□・]*([^\s:：（）()]{1,14})[:：]\s*$/);
+      if (m && blanks.indexOf(m[1]) < 0) blanks.push(m[1]);
+    });
+    if (blanks.length) out.push('値が空の欄があります：' + blanks.join('、'));
+    // 案件くんの値と、書類の値が違う
+    CHECK_LABELS.forEach(function (lb) {
+      var want = values && values[lb] ? String(values[lb]).trim() : '';
+      if (!want) return;
+      var m = t.match(new RegExp('(?:^|\\n)[\\s■●◆□・]*' + lb + '[:：]\\s*([^\\n]+)'));
+      if (m && m[1].trim() && m[1].trim() !== want) out.push('「' + lb + '」が、案件くんの値と違います（書類：' + m[1].trim() + '／案件くん：' + want + '）');
+    });
+    if (/（例[:：]|\(例[:：]/.test(t)) out.push('「（例：…）」の見本の文が、そのまま残っています');
+    if (/(^|\n)[^\n]*[:：]?\s*(　|\s)+年(　|\s)+月(　|\s)+日/.test(t)) out.push('日付が空欄のようです（「　年　月　日」）');
+    return out;
+  }
+
   // 案件名から、橋梁か一般道路かを推定する。「〇〇橋」「高架橋」「跨線橋」「橋梁」が入っていれば橋梁。
   // 「橋本」「橋口」のような地名の「橋」は、橋として数えない
   var BRIDGE = /高架|跨線|橋梁|[^\s\u3000橋]橋(?![本口田爪立場詰間])/;
@@ -179,7 +225,7 @@
   // Node（テスト）から使うときは、ここまでの部品だけを渡して終わる
   if (typeof kintone === 'undefined') {
     if (typeof module !== 'undefined' && module.exports) {
-      module.exports = { BUTTON_SPACE_ID: BUTTON_SPACE_ID, fieldText: fieldText, replacePlaceholders: replacePlaceholders, fillTemplate: fillTemplate, hasPlaceholders: hasPlaceholders, guessTarget: guessTarget, buildFilename: buildFilename, buildValues: buildValues, quote: quote, SUB: SUB, MF: MF, today: today };
+      module.exports = { checkText: checkText, extractText: extractText, tidyMemo: tidyMemo, BUTTON_SPACE_ID: BUTTON_SPACE_ID, fieldText: fieldText, replacePlaceholders: replacePlaceholders, fillTemplate: fillTemplate, hasPlaceholders: hasPlaceholders, guessTarget: guessTarget, buildFilename: buildFilename, buildValues: buildValues, quote: quote, SUB: SUB, MF: MF, today: today };
     }
     return;
   }
@@ -342,7 +388,7 @@
     return Promise.all([projectRecord(ctx.projectId), download(tpl.fileKey)]).then(function (res) {
       var record = res[0], cur = existingOf(record)[docName];
       var version = (cur ? cur.version : 0) + 1;
-      var blank = {}; ASK.forEach(function (a) { blank[a.key] = ''; });   // 入力されなかった項目は、空のまま入れて、あとで知らせる
+      var blank = {}; ASK.forEach(function (a) { blank[a.key] = askDefault(a); });   // 入力されなかった項目の言葉（なければ空のまま入れて、あとで知らせる）
       var values = Object.assign(blank, ctx.values, extra || {}, { '版': 'v' + version, '書類名': docName });
       return fillTemplate(JSZip, res[1], ext, values).then(function (out) {
         var filename = buildFilename(ctx.projectName, docName, version, ext);
@@ -491,7 +537,7 @@
           asks.forEach(function (a) {
             card.appendChild(el('div', 'font-size:12px;color:#666;margin-top:8px', a.label));
             var inp = a.type === 'memo' ? el('textarea', 'width:100%;height:160px;box-sizing:border-box;font-size:14px;padding:6px') : el('input', 'width:100%;box-sizing:border-box;font-size:14px;padding:6px');
-            if (a.type === 'date') { inp.type = 'date'; inp.value = isoToday(); } else if (a.type === 'text') inp.type = 'text';
+            if (a.type === 'date') { inp.type = 'date'; inp.value = isoToday(); } else if (a.type === 'text') { inp.type = 'text'; if (a.init) inp.value = a.init(); }
             inp.setAttribute('data-ask', a.key); inputs[a.key] = inp; card.appendChild(inp);
           });
           var bar = el('div', 'margin-top:12px;display:flex;gap:8px;justify-content:flex-end');
@@ -505,6 +551,7 @@
               var t = inputs[a.key].value;
               if (a.type === 'date') { var m = t.match(/^(\d{4})-(\d{2})-(\d{2})$/); t = m ? m[1] + '年' + Number(m[2]) + '月' + Number(m[3]) + '日' : t; }
               v[a.key] = a.type === 'memo' ? tidyMemo(t) : t.trim();
+              if (!v[a.key]) v[a.key] = askDefault(a);
             });
             close(v);
           });
@@ -563,7 +610,20 @@
               setMsg('v' + r.version + ' として登録しました：' + r.filename, false); updateStageLabels(); show();
             }).catch(function (e) { rev.disabled = false; setMsg((e && e.message) || '登録できませんでした', true); });
           });
-          right.appendChild(rev); right.appendChild(pick);
+          // 書類のチェック：保存した最新の書類を、ダウンロードする前に、画面の中だけで確認する（外部には送りません）
+          var chk = el('button', 'padding:6px 10px;font-size:12px;cursor:pointer', 'チェック'); chk.type = 'button';
+          chk.addEventListener('click', function () {
+            chk.disabled = true; setMsg('「' + name + '」をチェックしています…', false);
+            var cur = existing[name];
+            (cur.data ? Promise.resolve(cur.data) : download(cur.file.fileKey)).then(function (buf) {
+              return extractText(JSZip, buf, extOf(cur.filename || (cur.file && cur.file.name) || ''));
+            }).then(function (text) {
+              var res = checkText(text, ctx.values);
+              chk.disabled = false;
+              setMsg(res.length ? '「' + name + '」のチェック結果（' + res.length + '件）：\n・' + res.join('\n・') : '「' + name + '」：問題は見つかりませんでした', res.length > 0);
+            }).catch(function (e) { chk.disabled = false; setMsg((e && e.message) || 'チェックできませんでした', true); });
+          });
+          right.appendChild(chk); right.appendChild(rev); right.appendChild(pick);
         }
         row.appendChild(left); row.appendChild(right);
         return row;

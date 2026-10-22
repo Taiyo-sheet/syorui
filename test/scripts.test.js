@@ -214,3 +214,34 @@ test('add-button-space：書類関係の行の下にスペースを足す／既�
     assert.strictEqual(r.code, 2, r.out); assert.match(r.out, /すでにあります/);
   });
 });
+
+test('template-tool：list／get／put（確認だけは変えない・差し替えで旧版が残る・旧版は3つまで）', async () => {
+  await withMock(async (mock, env) => {
+    const tpl = await build();
+    mock.addApp('10', '書類マスタ');
+    const k1 = mock.addFile(tpl.docx, '議事次第.docx');
+    mock.addRecord('10', { 書類名: { value: '打合せ議事次第' }, 工程: { value: '打合せ・見積・提案' }, 表示順: { value: '210' }, 使用状況: { value: '使用中' }, 雛形: { value: [{ fileKey: k1, name: '議事次第.docx' }] } });
+    mock.addRecord('10', { 書類名: { value: '見積書' }, 工程: { value: '打合せ・見積・提案' }, 表示順: { value: '220' }, 使用状況: { value: '使用中' }, 雛形: { value: [] } });
+    const work = fs.mkdtempSync(path.join(os.tmpdir(), 'kd-tpl-'));
+    let r = await run('template-tool.js', ['list'], env);
+    assert.strictEqual(r.code, 0, r.out); assert.match(r.out, /打合せ議事次第 ｜ 議事次第\.docx ｜/); assert.match(r.out, /見積書 ｜ 雛形なし/);
+    r = await run('template-tool.js', ['get', '--doc=打合せ議事次第', '--out=' + work], env);
+    assert.strictEqual(r.code, 0, r.out); assert.ok(fs.readFileSync(path.join(work, '議事次第.docx')).equals(tpl.docx), '取り出した中身が同じ');
+
+    // 直したファイル（{{議事録メモ}} を足したもの）
+    const z = await JSZip.loadAsync(tpl.docx);
+    z.file('word/document.xml', (await z.file('word/document.xml').async('string')).replace('</w:body>', '<w:p><w:r><w:t>{{議事録メモ}}</w:t></w:r></w:p></w:body>'));
+    const fixed = path.join(work, '議事次第_改.docx'); fs.writeFileSync(fixed, await z.generateAsync({ type: 'nodebuffer' }));
+    r = await run('template-tool.js', ['put', '--doc=打合せ議事次第', '--file=' + fixed], env);
+    assert.strictEqual(r.code, 0, r.out); assert.match(r.out, /確認だけです/); assert.match(r.out, /議事録メモ/);
+    assert.strictEqual(mock.state.records['10'][0]['雛形'].value.length, 1, '確認だけでは変わらない');
+    // 4回差し替える：先頭が最新・旧版は最新3つまで
+    for (let i = 0; i < 4; i++) { r = await run('template-tool.js', ['put', '--doc=打合せ議事次第', '--file=' + fixed, '--yes'], env); assert.strictEqual(r.code, 0, r.out); assert.match(r.out, /OK 差し替え後の雛形/); }
+    const names = mock.state.records['10'][0]['雛形'].value.map((f) => f.name);
+    assert.strictEqual(names[0], '議事次第_改.docx', '先頭が、使われる雛形');
+    assert.strictEqual(names.length, 4, '最新1つ＋旧版3つ');
+    assert.ok(names.slice(1).every((n) => /^旧版_\d{8}_/.test(n)), names.join(','));
+    r = await run('template-tool.js', ['get', '--doc=存在しない'], env);
+    assert.strictEqual(r.code, 1, r.out);
+  });
+});

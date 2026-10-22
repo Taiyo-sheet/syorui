@@ -127,3 +127,19 @@ test('guessTarget：「〇〇橋」「高架橋」は橋梁、地名の「橋本
   for (const n of ['東京高架橋 補修工事', '第二多摩川橋 床版工事', '新大橋', '跨線橋 ロードヒーティング', '〇〇橋梁 点検', '隅田川橋 左岸']) assert.strictEqual(lib.guessTarget(n), '橋梁', n);
   for (const n of ['国道17号 ロードヒーティング', '橋本市道 舗装工事', '橋口交差点 改良', '東京Aビル 改修工事', '', undefined]) assert.strictEqual(lib.guessTarget(n), '一般道路', String(n));
 });
+
+test('checkText：残った {{ }}・空の欄・案件くんの値との違い・見本の文・空の日付を指摘する／問題なければ空', () => {
+  const ok = '【打合せ議事録】\n■ 工事名称：東京Aビル\n■ 工事場所：千代田区1-1\n■ 日時：2026年10月22日\n';
+  assert.deepStrictEqual(lib.checkText(ok, { 工事名称: '東京Aビル', 工事場所: '千代田区1-1' }), []);
+  const bad = '■ 工事名称：大阪Bビル\n■ 工事場所：\n■ 担当：{{担当者}}\n（例：工程確認／課題整理）\n日時：　　年　　月　　日\n';
+  const r = lib.checkText(bad, { 工事名称: '東京Aビル', 工事場所: '千代田区1-1' });
+  assert.ok(r.some((x) => /置き換えられていない.*\{\{担当者\}\}/.test(x)), r.join('|'));
+  assert.ok(r.some((x) => /値が空の欄.*工事場所/.test(x)), r.join('|'));
+  assert.ok(r.some((x) => /工事名称.*違います.*大阪Bビル.*東京Aビル/.test(x)), r.join('|'));
+  assert.ok(r.some((x) => /見本の文/.test(x)), r.join('|'));
+  assert.ok(r.some((x) => /日付が空欄/.test(x)), r.join('|'));
+});
+
+test('tidyMemo：記号をそろえ、空行を取り除く', () => {
+  assert.strictEqual(lib.tidyMemo('- a\n\n● b\n・c\n* d'), '・a\n・b\n・c\n・d');
+});

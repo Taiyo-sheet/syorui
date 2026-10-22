@@ -500,3 +500,41 @@ test('画面：round-buttons.js は、元のボタンを丸くする（押した
     await ctx.close();
   } finally { await browser.close(); await mock.close(); }
 });
+
+test('画面：議事録の全項目（作成者の初期値・出席者は空なら「不明」・空の項目は「なし」）／作成後に「チェック」で指摘が出る', { skip }, async () => {
+  const mock = createMock(); const url = await mock.listen();
+  const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
+  try {
+    await seed(mock);
+    const tpl = await build();
+    const z = await JSZip.loadAsync(tpl.docx);
+    const P = (t) => '<w:p><w:r><w:t>' + t + '</w:t></w:r></w:p>';
+    z.file('word/document.xml', '<w:document xmlns:w="x"><w:body>' + P('■ 工事名称：{{案件名}}') + P('■ 工事場所：{{存在しない場所}}') + P('日時：{{打合せ日}}　作成者：{{作成者}}') + P('出席者：{{出席者}}') + P('議題：{{議題}}') + P('内容：{{議事録メモ}}') + P('決定：{{決定事項}}') + P('ToDo：{{ToDo}}') + P('次回：{{次回予定}}') + '</w:body></w:document>');
+    const k = mock.addFile(await z.generateAsync({ type: 'nodebuffer' }), 'gijiroku2.docx');
+    mock.addRecord('10', { 書類名: { value: '議事録' }, 工程: { value: '打合せ・見積・提案' }, 表示順: { value: '205' }, 説明: { value: '' }, 見られる立場: { value: ['営業'] }, 使用状況: { value: '使用中' }, 雛形: { value: [{ fileKey: k, name: 'gijiroku2.docx' }] } });
+    const { page, errors } = await openPage(browser, url, '/__page');
+    await page.locator('[data-doc-hub]').click();
+    await page.getByText('工程別の書類：').waitFor();
+    await page.locator('select').nth(0).selectOption('打合せ・見積・提案');
+    await page.locator('div[style*="border-top"]', { hasText: '議事録' }).getByRole('button', { name: '作成して保存' }).click();
+    await page.locator('[data-ask="ToDo"]').waitFor();
+    assert.strictEqual(await page.locator('[data-ask="作成者"]').inputValue(), 'くに', '作成者の初期値（開いた人の名前が取れないときは「くに」）');
+    await page.locator('[data-ask="議題"]').fill('- 工程の確認\n- 見積の再提出');
+    await page.locator('[data-ask="決定事項"]').fill('● 来週着工');
+    await page.locator('[data-ask="ToDo"]').fill('10/25まで 太田 見積を出す');
+    const [dl] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: '作成して保存' }).last().click()]);
+    const got = []; for await (const c of await dl.createReadStream()) got.push(c);
+    const text = (await (await JSZip.loadAsync(Buffer.concat(got))).file('word/document.xml').async('string')).replace(/<w:br\/>/g, '\n').replace(/<[^>]*>/g, ' ');
+    assert.match(text, /作成者：くに/); assert.match(text, /出席者：不明/); assert.match(text, /議題：・工程の確認\s+・見積の再提出/);
+    assert.match(text, /決定：・来週着工/); assert.match(text, /ToDo：10\/25まで 太田 見積を出す/); assert.match(text, /次回：なし/);
+    assert.match(text, /日時：\d{4}年\d{1,2}月\d{1,2}日/, '打合せ日の初期値は、今日');
+    // 「チェック」：置き換えできなかった {{存在しない場所}} を指摘する
+    await page.getByText(/置き換えできずに残った項目/).waitFor();
+    await page.getByRole('button', { name: '閉じる' }).click();
+    await page.locator('[data-doc-hub]').click();
+    await page.locator('select').nth(0).selectOption('打合せ・見積・提案');
+    await page.locator('div[style*="border-top"]', { hasText: '議事録' }).getByRole('button', { name: 'チェック' }).click();
+    await page.getByText(/チェック結果.*置き換えられていない項目が残っています：\{\{存在しない場所\}\}/s).waitFor();
+    assert.deepStrictEqual(errors, []);
+  } finally { await browser.close(); await mock.close(); }
+});

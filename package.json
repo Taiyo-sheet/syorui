@@ -10,6 +10,7 @@
     "backup": "node scripts/backup-app.js",
     "add-doc-storage": "node scripts/add-doc-storage.js",
     "add-button-space": "node scripts/add-button-space.js",
+    "template": "node scripts/template-tool.js",
     "apply-customize": "node scripts/apply-customize.js",
     "make-test-templates": "node scripts/make-test-templates.js",
     "e2e": "node scripts/e2e-check.js"
