@@ -115,7 +115,7 @@ function createMock() {
               });
               return { id: row.id || String(nextRow++), value: cells };
             });
-          } else r[c] = Object.assign({}, r[c], { value: Array.isArray(v) && v[0] && v[0].fileKey ? v.map((f) => ({ fileKey: f.fileKey, name: s.files[f.fileKey].name, size: String(s.files[f.fileKey].buf.length) })) : v });
+          } else r[c] = Object.assign({}, r[c], { value: Array.isArray(v) && v[0] && v[0].fileKey ? ((have) => v.filter((f) => have.has(f.fileKey)).concat(v.filter((f) => !have.has(f.fileKey))))(new Set(((r[c] && r[c].value) || []).map((f) => f.fileKey))).map((f) => ({ fileKey: f.fileKey, name: s.files[f.fileKey].name, size: String(s.files[f.fileKey].buf.length) })) : v });
         });
         r.$revision.value = String(Number(r.$revision.value) + 1);
         return send(200, { revision: r.$revision.value });

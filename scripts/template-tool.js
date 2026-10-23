@@ -74,9 +74,11 @@ async function main() {
     // 古い雛形を、旧版として残す（ダウンロード → 名前を変えて、アップロード）
     const keep = [];
     for (const f of files) {
+      // すべて、取り出して、上げ直す：すでに保存されているファイルは、キントーンが、新しく上げたファイルより先に並べるため、
+      // 上げ直さないと、新しい雛形が、先頭に来ないことがある
       const old = /^旧版_/.test(f.name);
       const name = old ? f.name : '旧版_' + stamp() + '_' + f.name;
-      keep.push({ fileKey: old ? f.fileKey : await k.upload(await k.download(f.fileKey), name, 'application/octet-stream'), name });
+      keep.push({ fileKey: await k.upload(await k.download(f.fileKey), name, 'application/octet-stream'), name });
     }
     const newKey = await k.upload(buf, path.basename(file), 'application/octet-stream');
     const next = [{ fileKey: newKey }].concat(keep.slice(0, KEEP).map((x) => ({ fileKey: x.fileKey })));
