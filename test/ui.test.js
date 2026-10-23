@@ -702,3 +702,55 @@ test('画面：タブの見た目に差がなく、選ばれているタブが�
     await ctx.close();
   } finally { await browser.close(); await mock.close(); }
 });
+
+test('画面：議事録に、音声の文字起こしを貼り付けると、かんたん整理（外部に送らない）／AIで整理（未設定のあいだは押せない）で、項目が埋まる', { skip }, async () => {
+  const mock = createMock(); const url = await mock.listen();
+  const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
+  try {
+    await seed(mock);
+    const tpl = await build();
+    const z = await JSZip.loadAsync(tpl.docx);
+    const P = (t) => '<w:p><w:r><w:t>' + t + '</w:t></w:r></w:p>';
+    z.file('word/document.xml', '<w:document xmlns:w="x"><w:body>' + P('出席者：{{出席者}}') + P('場所：{{場所}}') + P('議題：{{議題}}') + P('内容：{{議事録メモ}}') + P('決定：{{決定事項}}') + P('ToDo：{{ToDo}}') + P('次回：{{次回予定}}') + '</w:body></w:document>');
+    const k = mock.addFile(await z.generateAsync({ type: 'nodebuffer' }), 'gijiroku3.docx');
+    mock.addRecord('10', { 書類名: { value: '議事録' }, 工程: { value: '打合せ・見積・提案' }, 表示順: { value: '205' }, 説明: { value: '' }, 見られる立場: { value: ['営業'] }, 使用状況: { value: '使用中' }, 雛形: { value: [{ fileKey: k, name: 'gijiroku3.docx' }] } });
+    const ctx = await browser.newContext(); const page = await ctx.newPage();
+    const errors = []; page.on('pageerror', (e) => errors.push(e.message));
+    let withAI = false; const sent = [];
+    page.on('request', (r) => { if (/\/minutes$/.test(r.url()) && r.method() === 'POST') sent.push(r.url()); });
+    await page.route('**/__lib/doc-button.js', async (route) => {
+      let src = fs.readFileSync(require('path').join(__dirname, '..', 'customize', 'doc-button.js'), 'utf8');
+      src = src.replace(/var MINUTES_SERVER_URL = '[^']*';/, "var MINUTES_SERVER_URL = '" + (withAI ? url : '') + "';");
+      await route.fulfill({ status: 200, contentType: 'text/javascript; charset=utf-8', body: src });
+    });
+    page.on('dialog', (d) => d.accept());
+    await page.addInitScript(FAKE_KINTONE);
+    const open = async () => {
+      await page.goto(url + '/__page'); await page.evaluate((r) => window.__fire(r), RECORD);
+      await page.locator('[data-doc-hub]').click(); await page.getByText('工程別の書類：').waitFor();
+      await page.locator('select').nth(0).selectOption('打合せ・見積・提案');
+      await page.locator('div[style*="border-top"]', { hasText: '議事録' }).getByRole('button', { name: '作成して保存' }).click();
+      await page.locator('[data-minutes-src]').waitFor();
+    };
+    await open();
+    assert.strictEqual(await page.getByRole('button', { name: 'AIで整理（未設定）' }).isDisabled(), true, '設定するまで、AIは押せない');
+    await page.locator('[data-minutes-src]').fill('えー、出席者：太田、國井\n場所：現場事務所\n工程の確認について。\n夜間規制は9時から17時で決定しました。\n来週までに太田さんが見積書を送付します。\n次回は11月1日です。');
+    await page.getByRole('button', { name: 'かんたん整理（外部に送りません）' }).click();
+    assert.strictEqual(await page.locator('[data-ask="出席者"]').inputValue(), '太田、國井');
+    assert.strictEqual(await page.locator('[data-ask="場所"]').inputValue(), '現場事務所');
+    assert.match(await page.locator('[data-ask="決定事項"]').inputValue(), /夜間規制/);
+    assert.match(await page.locator('[data-ask="ToDo"]').inputValue(), /来週までに太田さん/);
+    assert.match(await page.locator('[data-ask="次回予定"]').inputValue(), /11月1日/);
+    assert.strictEqual(sent.length, 0, 'かんたん整理は、外部に何も送らない');
+    // AI（サーバー設定あり）
+    withAI = true; await open();
+    await page.locator('[data-minutes-src]').fill('適当な文字起こし');
+    await page.getByRole('button', { name: 'AIで整理（外部のAIに送ります）' }).click();
+    await page.getByText(/AIが分けました/).waitFor();
+    assert.strictEqual(await page.locator('[data-ask="出席者"]').inputValue(), 'AI太田');
+    assert.strictEqual(await page.locator('[data-ask="決定事項"]').inputValue(), '・AI決定');
+    assert.strictEqual(sent.length, 1, 'AIを押したときだけ、送る');
+    assert.deepStrictEqual(errors, []);
+    await ctx.close();
+  } finally { await browser.close(); await mock.close(); }
+});

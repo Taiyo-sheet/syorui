@@ -150,3 +150,13 @@ test('checkText：案件くんの全項目を突き合わせる（違えば指�
   const r = lib.checkText('■ 発注者：国土交通省 高山国道事務所', v);
   assert.ok(r.some((x) => /「発注者」が、案件くんの値と違います（書類：国土交通省 高山国道事務所／案件くん：国土交通省 岐阜国道事務所）/.test(x)), r.join('|'));
 });
+
+test('summarizeLocal：文字起こしを、決定事項・ToDo・次回予定・出席者・場所・議題・内容に分ける（簡易）', () => {
+  const t = 'えー、出席者：太田、國井、藤原\n場所：現場事務所\n工程の確認について。\n夜間規制の時間は、9時から17時で決定しました。\n来週までに太田さんが見積書を送付します。\nあの、現場は雪が多いそうです。\n次回は11月1日にやります。';
+  const r = lib.summarizeLocal(t);
+  assert.strictEqual(r['出席者'], '太田、國井、藤原'); assert.strictEqual(r['場所'], '現場事務所');
+  assert.match(r['議題'], /工程の確認について/); assert.match(r['決定事項'], /夜間規制.*決定/);
+  assert.match(r['ToDo'], /来週までに太田さんが見積書を送付/); assert.match(r['議事録メモ'], /雪が多い/); assert.doesNotMatch(r['議事録メモ'], /^あの/);
+  assert.match(r['次回予定'], /11月1日/);
+  assert.deepStrictEqual(lib.summarizeLocal(''), { '出席者': '', '場所': '', '議題': '', '議事録メモ': '', '決定事項': '', 'ToDo': '', '次回予定': '' });
+});

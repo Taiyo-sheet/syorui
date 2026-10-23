@@ -163,6 +163,27 @@
     { key: '次回予定', label: '次回予定（あれば。「次回は〇月〇日」など）', type: 'text', blank: 'なし' }
   ];
   function askDefault(a) { return typeof a.blank === 'function' ? a.blank() : (a.blank || ''); }
+  // 音声の文字起こしを、議事録の項目に分ける（簡易版。外部には送りません。精度は高くないので、必ず、確認・修正してから作成する）
+  //   戻り値：{ 出席者, 場所, 議題, 議事録メモ, 決定事項, ToDo, 次回予定 }（見つからなかった項目は、空）
+  function summarizeLocal(text) {
+    var out = { '出席者': '', '場所': '', '議題': [], '議事録メモ': [], '決定事項': [], 'ToDo': [], '次回予定': '' };
+    var FILLER = /^(えー+|あー+|えっと|あの+|その+|まあ|はい|ええ|うん|そうですね)[、。,\s]*/;
+    String(text || '').replace(/\r/g, '').split(/\n|(?<=[。！？!?])/).forEach(function (raw) {
+      var l = raw.replace(/^[\s・\-*●•‣]+/, '').replace(FILLER, '').trim();
+      if (l.length < 2) return;
+      var m;
+      if ((m = l.match(/^(?:出席者|参加者)[:：]\s*(.+)$/))) { out['出席者'] = m[1].trim(); return; }
+      if ((m = l.match(/^(?:場所|会場)[:：]\s*(.+)$/))) { out['場所'] = m[1].trim(); return; }
+      if (/次回/.test(l) && !out['次回予定']) { out['次回予定'] = l; return; }
+      if (/(決定|決まり|決めまし|確定|で行く|で進め|で合意|ということで|とします|することにな)/.test(l)) { out['決定事項'].push(l); return; }
+      if (/(まで(に)?|お願い|対応|送付|提出|手配|連絡|確認し|調整|共有)/.test(l) && /(\d{1,2}[\/月]\d{1,2}|来週|今週|明日|明後日|今月|来月|月末|至急|早め)/.test(l)) { out['ToDo'].push(l); return; }
+      if (/(について|の件|議題|テーマ)/.test(l) && l.length <= 40) { out['議題'].push(l); return; }
+      out['議事録メモ'].push(l);
+    });
+    ['議題', '議事録メモ', '決定事項', 'ToDo'].forEach(function (k) { out[k] = out[k].join('\n'); });
+    return out;
+  }
+
   // 箇条書きの記号（- * ● • ・）をそろえる。空行は取り除く
   function tidyMemo(t) {
     return String(t || '').split(/\r?\n/).map(function (l) { return l.trim(); }).filter(Boolean)
@@ -232,7 +253,7 @@
   // Node（テスト）から使うときは、ここまでの部品だけを渡して終わる
   if (typeof kintone === 'undefined') {
     if (typeof module !== 'undefined' && module.exports) {
-      module.exports = { checkText: checkText, extractText: extractText, tidyMemo: tidyMemo, BUTTON_SPACE_ID: BUTTON_SPACE_ID, fieldText: fieldText, replacePlaceholders: replacePlaceholders, fillTemplate: fillTemplate, hasPlaceholders: hasPlaceholders, guessTarget: guessTarget, buildFilename: buildFilename, buildValues: buildValues, quote: quote, SUB: SUB, MF: MF, today: today };
+      module.exports = { summarizeLocal: summarizeLocal, checkText: checkText, extractText: extractText, tidyMemo: tidyMemo, BUTTON_SPACE_ID: BUTTON_SPACE_ID, fieldText: fieldText, replacePlaceholders: replacePlaceholders, fillTemplate: fillTemplate, hasPlaceholders: hasPlaceholders, guessTarget: guessTarget, buildFilename: buildFilename, buildValues: buildValues, quote: quote, SUB: SUB, MF: MF, today: today };
     }
     return;
   }
@@ -590,12 +611,37 @@
         });
       }
       // 議事録などの入力欄（雛形に {{打合せ日}} {{議事録メモ}} などがあるときだけ出す）
-      function askValues(asks, name) {
+      var MINUTES_SERVER_URL = '';   // AIで議事録を整理するサーバーのURL（pdf-server の /minutes）。空のあいだは、「AIで整理」は押せない
+  function askValues(asks, name) {
         return new Promise(function (resolve) {
           var cover = el('div', 'position:fixed;left:0;top:0;right:0;bottom:0;background:rgba(0,0,0,.45);z-index:10001;overflow:auto');
           var card = el('div', 'background:#fff;max-width:560px;margin:40px auto;border-radius:8px;padding:16px;font-size:14px;box-sizing:border-box;width:calc(100% - 24px)');
           card.appendChild(el('div', 'font-weight:bold;font-size:16px;margin-bottom:10px', '「' + name + '」の内容'));
           var inputs = {};
+          var isMinutes = asks.some(function (a) { return a.key === '議事録メモ'; });
+          var fillFrom = function (res) {
+            Object.keys(res).forEach(function (key) { if (inputs[key] && res[key]) inputs[key].value = res[key]; });
+          };
+          if (isMinutes) {
+            card.appendChild(el('div', 'font-size:12px;color:#666', '音声の文字起こしを、そのまま貼り付けて、下のボタンで、項目に分けられます（必ず、確認・修正してから、作成してください）'));
+            var src = el('textarea', 'width:100%;height:110px;box-sizing:border-box;font-size:13px;padding:6px;margin-top:4px;background:#f7fafc'); src.setAttribute('data-minutes-src', '1');
+            card.appendChild(src);
+            var tools = el('div', 'margin:4px 0 8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center');
+            var easy = el('button', 'padding:6px 10px;font-size:12px;cursor:pointer', 'かんたん整理（外部に送りません）'); easy.type = 'button';
+            easy.addEventListener('click', function () { fillFrom(summarizeLocal(src.value)); note.textContent = '簡易に分けました。内容を、確認・修正してください。'; });
+            var ai = el('button', 'padding:6px 10px;font-size:12px;cursor:pointer;font-weight:bold', MINUTES_SERVER_URL ? 'AIで整理（外部のAIに送ります）' : 'AIで整理（未設定）'); ai.type = 'button'; ai.disabled = !MINUTES_SERVER_URL;
+            var note = el('span', 'font-size:12px;color:#1f7a3d');
+            ai.addEventListener('click', function () {
+              if (!src.value.trim()) { note.textContent = '文字起こしを、貼り付けてください'; return; }
+              if (!confirm('貼り付けた文章を、外部のAIに送って、整理します。よろしいですか？')) return;
+              ai.disabled = true; note.textContent = 'AIが、整理しています…';
+              fetch(MINUTES_SERVER_URL.replace(/\/$/, '') + '/minutes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: src.value }) })
+                .then(function (r) { if (!r.ok) throw new Error('AIの整理に失敗しました（' + r.status + '）'); return r.json(); })
+                .then(function (res) { fillFrom(res); ai.disabled = false; note.textContent = 'AIが分けました。内容を、確認・修正してください（AIの案です。間違いが、含まれる可能性があります）。'; })
+                .catch(function (e) { ai.disabled = false; note.style.color = '#c0392b'; note.textContent = (e && e.message) || 'AIの整理に失敗しました'; });
+            });
+            tools.appendChild(easy); tools.appendChild(ai); tools.appendChild(note); card.appendChild(tools);
+          }
           asks.forEach(function (a) {
             card.appendChild(el('div', 'font-size:12px;color:#666;margin-top:8px', a.label));
             var inp = a.type === 'memo' ? el('textarea', 'width:100%;height:160px;box-sizing:border-box;font-size:14px;padding:6px') : el('input', 'width:100%;box-sizing:border-box;font-size:14px;padding:6px');
