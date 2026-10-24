@@ -377,6 +377,11 @@
   }
 
 
+  // 書類マスタ（master-template.js）が、「試しに作る」で、この部品だけを借りるときの出口（この画面では、ボタンなどは、一切出さない）
+  if (typeof kintone !== 'undefined' && typeof window !== 'undefined' && window.__TS_DOC_ENGINE_ONLY) {
+    window.TSDocEngine = { fillTemplate: fillTemplate, buildValues: buildValues, checkText: checkText, extractText: extractText, fieldText: fieldText, ASK: ASK, NAME_LABELS: NAME_LABELS };
+    return;
+  }
   // Node（テスト）から使うときは、ここまでの部品だけを渡して終わる
   if (typeof kintone === 'undefined') {
     if (typeof module !== 'undefined' && module.exports) {

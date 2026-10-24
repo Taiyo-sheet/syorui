@@ -41,6 +41,7 @@ async function setup(mock, url, browser) {
   await page.goto(url + '/__page');
   await page.addScriptTag({ content: fs.readFileSync(require.resolve('jszip/dist/jszip.min.js'), 'utf8') });
   await page.addScriptTag({ content: fs.readFileSync(__dirname + '/../customize/master-template.js', 'utf8') });
+  await page.addScriptTag({ content: fs.readFileSync(__dirname + '/../customize/doc-button.js', 'utf8') });   // 書類マスタでは、master-template.js の後ろに登録する
   return { page, errors, dialogs };
 }
 async function choose(page, trigger, paths) {
@@ -110,5 +111,64 @@ test('書類マスタ：確認で「キャンセル」なら、何も変えな�
     await page.waitForTimeout(600);
     assert.deepStrictEqual(names(mock, id), ['旧.docx']);
     assert.strictEqual(mock.state.records['10'][0]['雛形'].value.length, 1, 'キャンセルなら、何も増えない');
+  } finally { await browser.close(); await mock.close(); }
+});
+
+// 案件くん（575）の見本：項目の定義と、案件1件
+function addAnken(mock) {
+  mock.addApp('575', '案件くん', { fields: {
+    c_name: { type: 'SINGLE_LINE_TEXT', code: 'c_name', label: '工事名称' },
+    c_place: { type: 'SINGLE_LINE_TEXT', code: 'c_place', label: '工事場所' },
+  } });
+  mock.addRecord('575', { c_name: { type: 'SINGLE_LINE_TEXT', value: '第二多摩川橋 補修工事' }, c_place: { type: 'SINGLE_LINE_TEXT', value: '東京都調布市' } });
+}
+const docxWith = async (text) => {
+  const JSZip = require('jszip'); const z = new JSZip();
+  z.file('[Content_Types].xml', '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/></Types>');
+  z.file('word/document.xml', '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>' + text + '</w:t></w:r></w:p></w:body></w:document>');
+  return z.generateAsync({ type: 'nodebuffer' });
+};
+
+test('書類マスタ：雛形チェッカー（差し替えの確認に、案件くんにない項目名を出す）', { skip }, async () => {
+  const mock = createMock(); const url = await mock.listen();
+  const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
+  try {
+    mock.addApp('10', '書類マスタ'); addAnken(mock);
+    mock.addRecord('10', { 書類名: { value: 'あ' }, 雛形: { value: [] } });
+    const { page, dialogs } = await setup(mock, url, browser);
+    await page.evaluate((r) => window.__fire('app.record.detail.show', { record: r }), mock.state.records['10'][0]);
+    const buf = await docxWith('工事名称：{{工事名称}} 場所：{{工事場所}} 打ち間違い：{{工事場所々}} 日付：{{作成日}}');
+    await choose(page, () => page.locator('[data-master-swap]').click(), { name: 'new.docx', mimeType: 'application/octet-stream', buffer: buf });
+    await page.getByText(/差し替えました/).waitFor();
+    assert.match(dialogs[0], /【注意】案件くんにない項目名：{{工事場所々}}/);
+    assert.doesNotMatch(dialogs[0], /案件くんにない項目名：[^\n]*{{工事名称}}/, '正しい名前は、注意に出さない');
+    assert.doesNotMatch(dialogs[0], /案件くんにない項目名：[^\n]*{{作成日}}/, '自動で入る言葉は、注意に出さない');
+  } finally { await browser.close(); await mock.close(); }
+});
+
+test('書類マスタ：試しに作る（見本の案件を選ぶ→記入済みを作って点検。どこにも保存しない）', { skip }, async () => {
+  const mock = createMock(); const url = await mock.listen();
+  const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
+  try {
+    mock.addApp('10', '書類マスタ'); addAnken(mock);
+    const k = mock.addFile(await docxWith('工事名称：{{工事名称}} 場所：{{工事場所}} 版：{{版}} 内容：{{決定事項}} 誤り：{{ないもの}}'), '雛形.docx');
+    mock.addRecord('10', { 書類名: { value: '試験書類' }, 雛形: { value: [{ fileKey: k, name: '雛形.docx' }] } });
+    const before = JSON.stringify(mock.state.records);
+    const { page, errors } = await setup(mock, url, browser);
+    await page.evaluate((r) => window.__fire('app.record.detail.show', { record: r }), mock.state.records['10'][0]);
+    assert.strictEqual(await page.locator('[data-master-try]').count(), 1);
+    await page.locator('[data-master-try]').click();
+    await page.locator('[data-try-case]').first().waitFor();
+    assert.match(await page.locator('[data-try-panel]').textContent(), /第二多摩川橋 補修工事/);
+    await page.locator('[data-try-case]').first().click();
+    await page.getByText(/点検の結果/).waitFor();
+    const t = await page.locator('[data-try-panel]').textContent();
+    assert.match(t, /案件くんにない項目名（空になります）：.*ないもの/, '雛形の打ち間違いを、指摘する');
+    const [dl] = await Promise.all([page.waitForEvent('download'), page.locator('[data-try-download]').click()]);
+    const got = []; for await (const c of await dl.createReadStream()) got.push(c);
+    const JSZip = require('jszip'); const xml = await (await JSZip.loadAsync(Buffer.concat(got))).file('word/document.xml').async('string');
+    assert.match(xml, /第二多摩川橋 補修工事/); assert.match(xml, /東京都調布市/); assert.match(xml, /v0（試し）/); assert.match(xml, /【入力欄：決定事項】/);
+    assert.strictEqual(JSON.stringify(mock.state.records), before, '案件くんにも書類マスタにも、何も書き込まない');
+    assert.deepStrictEqual(errors, []);
   } finally { await browser.close(); await mock.close(); }
 });
