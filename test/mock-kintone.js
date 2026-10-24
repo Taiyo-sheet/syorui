@@ -7,7 +7,7 @@ function createMock() {
   const spaces = { 7: { id: '7', name: 'TAIYOSHEET事業部', defaultThread: '70' } };
 
   function addApp(id, name, extra) { s.apps[id] = Object.assign({ appId: String(id), name, spaceId: null, fields: {}, previewFields: {}, customize: { scope: 'ALL', desktop: { js: [], css: [] }, mobile: { js: [], css: [] } } }, extra || {}); s.records[id] = []; s.nextRec[id] = 1; }
-  function addRecord(appId, rec) { const id = s.nextRec[appId]++; s.records[appId].push(Object.assign({ $id: { type: '__ID__', value: String(id) } }, rec)); return String(id); }
+  function addRecord(appId, rec) { const id = s.nextRec[appId]++; s.records[appId].push(Object.assign({ $id: { type: '__ID__', value: String(id) }, $revision: { type: '__REVISION__', value: '1' } }, rec)); return String(id); }
   function addFile(buf, name) { const key = 'fk' + s.nextFile++; s.files[key] = { buf, name }; return key; }
 
   // query: 「項目 = 値」「項目 in ("値")」を and でつないだものと order by / limit だけ解釈する
@@ -38,6 +38,11 @@ function createMock() {
     const fs = require('fs'), path = require('path');
     if (req.method === 'GET' && (p === '/__page' || p === '/k/m/__page')) { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); return res.end('<!doctype html><meta charset="utf-8"><div id="hdr"></div><script src="/__lib/jszip.min.js"></script><script src="/__lib/doc-button.js"></script>'); }
     if (req.method === 'GET' && p === '/__lib/jszip.min.js') { res.writeHead(200, { 'Content-Type': 'text/javascript' }); return res.end(fs.readFileSync(path.join(__dirname, '..', 'node_modules', 'jszip', 'dist', 'jszip.min.js'))); }
+    if (req.method === 'GET' && p === '/__lib/taiyo-open-app.js') { res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }); return res.end(fs.readFileSync(path.join(__dirname, '..', 'customize', 'taiyo-open-app.js'))); }
+    if (req.method === 'GET' && p === '/__lib/round-buttons.js') { res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }); return res.end(fs.readFileSync(path.join(__dirname, '..', 'customize', 'round-buttons.js'))); }
+    if (req.method === 'OPTIONS' && p === '/minutes') { res.writeHead(204, { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Content-Type' }); return res.end(); }
+    if (req.method === 'POST' && p === '/minutes') { s.minutesBodies = (s.minutesBodies || []).concat([Buffer.concat(chunks).toString('utf8')]); res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Access-Control-Allow-Origin': '*' }); return res.end(JSON.stringify({ '出席者': 'AI太田', 'ToDo': '・【人物1】さんが【電話1】に連絡', '場所': 'AI現場', '議題': '・AI議題', '議事録メモ': '・AI内容', '決定事項': '・AI決定', '次回予定': 'AI次回' })); }
+    if (req.method === 'POST' && p === '/convert') { const buf = Buffer.concat(chunks); res.writeHead(200, { 'Content-Type': 'application/pdf' }); return res.end(Buffer.concat([Buffer.from('%PDF-1.4\n% fake of ' + (u.searchParams.get('ext') || '') + ' ' + buf.length + '\n'), Buffer.alloc(0)])); }
     if (req.method === 'GET' && p === '/__lib/doc-button.js') { res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' }); return res.end(fs.readFileSync(path.join(__dirname, '..', 'customize', 'doc-button.js'))); }
     if (!req.headers['x-cybozu-authorization'] && !req.headers['x-requested-with'] && !req.headers['content-type']) return send(401, { code: 'CB_AU01', message: 'no auth' });
     if (!req.headers['x-cybozu-authorization'] && !req.headers['x-requested-with'] && !(req.headers['content-type'] || '').includes('json')) return send(401, { code: 'CB_AU01', message: 'no auth' });
@@ -53,12 +58,18 @@ function createMock() {
       }
       if (req.method === 'GET' && p === '/k/v1/app') { const a = appOf(q.id); return a ? send(200, { appId: a.appId, name: a.name, spaceId: a.spaceId }) : send(404, { message: 'app' }); }
       if (req.method === 'POST' && p === '/k/v1/preview/app') { const id = String(s.nextApp++); addApp(id, body.name, { spaceId: String(body.space) }); return send(200, { app: id, revision: '1' }); }
-      if (req.method === 'POST' && p === '/k/v1/preview/app/form/fields') { Object.assign(appOf(body.app).previewFields, body.properties); return send(200, { revision: '2' }); }
+      if (req.method === 'POST' && p === '/k/v1/preview/app/form/fields') {
+        const pf = appOf(body.app).previewFields;
+        Object.keys(body.properties).forEach((c) => { const nw = body.properties[c]; if (nw.type === 'SUBTABLE' && pf[c] && pf[c].type === 'SUBTABLE') pf[c] = Object.assign({}, pf[c], { fields: Object.assign({}, pf[c].fields, nw.fields) }); else pf[c] = nw; });
+        return send(200, { revision: '2' });
+      }
       if (req.method === 'POST' && p === '/k/v1/preview/app/deploy') { body.apps.forEach((x) => { const a = appOf(x.app); a.fields = Object.assign({}, a.fields, a.previewFields); }); return send(200, {}); }
       if (req.method === 'GET' && p === '/k/v1/preview/app/deploy') return send(200, { apps: q['apps[0]'] ? [{ app: q['apps[0]'], status: 'SUCCESS' }] : [] });
       if (req.method === 'GET' && p === '/k/v1/app/form/fields') return send(200, { properties: appOf(q.app).fields, revision: '1' });
       if (req.method === 'GET' && p === '/k/v1/preview/app/form/fields') return send(200, { properties: appOf(q.app).previewFields, revision: '1' });
-      if (req.method === 'GET' && /^\/k\/v1\/(preview\/)?app\/(form\/layout|views|settings|status)$/.test(p)) return send(200, { layout: [], views: {}, revision: '1' });
+      if (req.method === 'GET' && /^\/k\/v1\/(preview\/)?app\/form\/layout$/.test(p)) { const a = appOf(q.app); return send(200, { layout: a.layout || [], revision: String(a.layoutRev || 1) }); }
+      if (req.method === 'PUT' && p === '/k/v1/preview/app/form/layout') { const a = appOf(body.app); a.layout = body.layout; a.layoutRev = (a.layoutRev || 1) + 1; return send(200, { revision: String(a.layoutRev) }); }
+      if (req.method === 'GET' && /^\/k\/v1\/(preview\/)?app\/(views|settings|status)$/.test(p)) return send(200, { layout: [], views: {}, revision: '1' });
       if (req.method === 'GET' && /^\/k\/v1\/(preview\/)?app\/customize$/.test(p)) return send(200, Object.assign({ revision: '1' }, appOf(q.app).customize));
       if (req.method === 'PUT' && p === '/k/v1/preview/app/customize') {
         const a = appOf(body.app);
@@ -86,6 +97,28 @@ function createMock() {
         const rec = Object.assign({}, body.record);
         Object.keys(rec).forEach((c) => { if (Array.isArray(rec[c].value) && rec[c].value[0] && rec[c].value[0].fileKey) rec[c] = { value: rec[c].value.map((f) => ({ fileKey: f.fileKey, name: s.files[f.fileKey].name })) }; });
         return send(200, { id: addRecord(body.app, rec), revision: '1' });
+      }
+      if (req.method === 'PUT' && p === '/k/v1/record') {
+        const r = s.records[body.app].find((x) => x.$id.value === String(body.id));
+        if (!r) return send(404, { message: 'rec' });
+        if (body.revision !== undefined && String(body.revision) !== r.$revision.value) return send(409, { code: 'GAIA_CO02', message: 'revision' });
+        let nextRow = 1000;
+        Object.keys(body.record).forEach((c) => {
+          const v = body.record[c].value;
+          if (r[c] && r[c].type === 'SUBTABLE') {
+            r[c].value = v.map((row) => {
+              const cells = {};
+              Object.keys(row.value).forEach((fc) => {
+                let cv = row.value[fc].value;
+                if (Array.isArray(cv)) cv = cv.map((f) => ({ fileKey: f.fileKey, name: s.files[f.fileKey].name }));
+                cells[fc] = { value: cv };
+              });
+              return { id: row.id || String(nextRow++), value: cells };
+            });
+          } else r[c] = Object.assign({}, r[c], { value: Array.isArray(v) && v[0] && v[0].fileKey ? ((have) => v.filter((f) => have.has(f.fileKey)).concat(v.filter((f) => !have.has(f.fileKey))))(new Set(((r[c] && r[c].value) || []).map((f) => f.fileKey))).map((f) => ({ fileKey: f.fileKey, name: s.files[f.fileKey].name, size: String(s.files[f.fileKey].buf.length) })) : v });
+        });
+        r.$revision.value = String(Number(r.$revision.value) + 1);
+        return send(200, { revision: r.$revision.value });
       }
       if (req.method === 'GET' && p === '/k/v1/records') {
         const recs = runQuery(q.app, q.query);

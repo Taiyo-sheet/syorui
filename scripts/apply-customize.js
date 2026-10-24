@@ -5,6 +5,7 @@
  *
  *   node scripts/apply-customize.js            … 登録後の姿を表示するだけ（何も変えない）
  *   node scripts/apply-customize.js --yes      … 実際に登録して公開する
+ *   --manifest=ファイル  … 登録内容のファイルを指定する（省略時は customize-manifest.json。アプリごとに別のファイルを使える）
  *
  * なぜ @kintone/customize-uploader を使わないか
  *   customize-uploader は、マニフェストに書いたものでカスタマイズ設定を「丸ごと置き換える」ため、
@@ -22,15 +23,17 @@ const { client } = require('./lib');
 const ROOT = path.join(__dirname, '..');
 
 function hasBackup(appId) {
-  const d = path.join(ROOT, 'backup');
+  const d = process.env.KINTONE_BACKUP_DIR || path.join(ROOT, 'backup');
   return fs.existsSync(d) && fs.readdirSync(d).some((n) => n.startsWith(appId + '_') && fs.existsSync(path.join(d, n, 'customize_live.json')));
 }
 const label = (it) => it.type === 'URL' ? it.url : (it.file && it.file.name) || '(ファイル)';
 
 async function main() {
   const go = process.argv.includes('--yes');
-  const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'customize-manifest.json'), 'utf8'));
-  const appId = String(process.env.KINTONE_APP_ID || manifest.app);
+  const mArg = process.argv.find((a) => a.startsWith('--manifest='));
+  const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, mArg ? mArg.slice(11) : 'customize-manifest.json'), 'utf8'));
+  // --manifest= を指定したときは、そのファイルの app を使う（環境変数 KINTONE_APP_ID で、うっかり別のアプリに入れないため）
+  const appId = String((mArg ? manifest.app : process.env.KINTONE_APP_ID) || manifest.app);
   const k = client();
 
   const app = await k.api('GET', '/k/v1/app', { id: appId });
