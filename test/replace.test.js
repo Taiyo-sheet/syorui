@@ -180,3 +180,22 @@ test('maskForAI：電話・メール・郵便番号・金額・「〇〇さん�
   assert.strictEqual(m.unmask('【人物99】は、そのまま'), '【人物99】は、そのまま', '知らない符号は、そのまま');
   assert.strictEqual(lib.maskForAI('', []).count, 0);
 });
+
+test('formatMinutes：見出し付きの、ひとかたまりの文章にする（空は「なし」、出席者は「不明」）', () => {
+  const t = lib.formatMinutes({ 出席者: '', 場所: '現場事務所', 議題: '・工程', 議事録メモ: '・現調', 決定事項: '・11月着工', ToDo: '', 次回予定: '' });
+  assert.strictEqual(t, '【出席者】\n不明\n\n【場所】\n現場事務所\n\n【議題】\n・工程\n\n【打合せ内容】\n・現調\n\n【決定事項】\n・11月着工\n\n【ToDo】\nなし\n\n【次回予定】\nなし');
+});
+
+test('{{議事録本文}}（Word）：【見出し】の行が太字になり、XMLが壊れず、本文の改行が保たれる', async () => {
+  const tpl = await build(); const z = await JSZip.loadAsync(tpl.docx);
+  z.file('word/document.xml', '<w:document xmlns:w="x"><w:body><w:p><w:r><w:rPr><w:sz w:val="22"/></w:rPr><w:t>{{議事録本文}}</w:t></w:r></w:p></w:body></w:document>');
+  const buf = await z.generateAsync({ type: 'nodebuffer' });
+  const out = await lib.fillTemplate(JSZip, buf, 'docx', { 議事録本文: '【決定事項】\n・着工は11月上旬 & 規制<9時>\n\n【議題】\n・工程' });
+  const xml = await (await JSZip.loadAsync(out.data)).file('word/document.xml').async('string');
+  assert.strictEqual((xml.match(/<w:r[ >]/g) || []).length, (xml.match(/<\/w:r>/g) || []).length, '<w:r> と </w:r> の数が合う');
+  assert.strictEqual((xml.match(/<w:t[ >]/g) || []).length, (xml.match(/<\/w:t>/g) || []).length, '<w:t> と </w:t> の数が合う');
+  assert.strictEqual((xml.match(/<w:b\/>/g) || []).length, 2, '見出し2つが太字');
+  const text = xml.replace(/<w:br\/>/g, '\n').replace(/<[^>]*>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+  assert.strictEqual(text, '【決定事項】\n・着工は11月上旬 & 規制<9時>\n\n【議題】\n・工程', '本文が、そのまま入る（特殊文字もそのまま）');
+  assert.ok(!out.unknown.includes('議事録本文'), '議事録本文は、置き換わる');
+});

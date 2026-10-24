@@ -770,3 +770,36 @@ test('画面：議事録に、音声の文字起こしを貼り付けると、�
     await ctx.close();
   } finally { await browser.close(); await mock.close(); }
 });
+
+test('画面：議事録（{{議事録本文}}）は、ひとつの四角に、見出し付きでまとまる。貼り付け→「かんたん整理」→四角に入る→直して作成→Wordに入る', { skip }, async () => {
+  const mock = createMock(); const url = await mock.listen();
+  const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
+  try {
+    await seed(mock);
+    const tpl = await build();
+    const z = await JSZip.loadAsync(tpl.docx);
+    const P = (t) => '<w:p><w:r><w:t>' + t + '</w:t></w:r></w:p>';
+    z.file('word/document.xml', '<w:document xmlns:w="x"><w:body>' + P('日時：{{打合せ日}}　作成者：{{作成者}}') + P('{{議事録本文}}') + '</w:body></w:document>');
+    const k = mock.addFile(await z.generateAsync({ type: 'nodebuffer' }), 'matome.docx');
+    mock.addRecord('10', { 書類名: { value: '議事録まとめ' }, 工程: { value: '打合せ・見積・提案' }, 表示順: { value: '205' }, 説明: { value: '' }, 見られる立場: { value: ['営業'] }, 使用状況: { value: '使用中' }, 雛形: { value: [{ fileKey: k, name: 'matome.docx' }] } });
+    const { page, errors } = await openPage(browser, url, '/__page');
+    await page.locator('[data-doc-hub]').click(); await page.getByText('工程別の書類：').waitFor();
+    await page.locator('select').nth(0).selectOption('打合せ・見積・提案');
+    await page.locator('div[style*="border-top"]', { hasText: '議事録まとめ' }).getByRole('button', { name: '作成して保存' }).click();
+    await page.locator('[data-ask="議事録本文"]').waitFor();
+    assert.strictEqual(await page.locator('[data-ask]').count(), 1, '入力欄は、ひとつの四角だけ');
+    await page.locator('[data-minutes-src]').fill('【出席者】太田、國井\n【議題】\n・夜間規制\n【決定事項】\n・規制は9時から17時\n【ToDo】\n・10/25まで 太田 見積を出す');
+    await page.getByRole('button', { name: 'かんたん整理（外部に送りません）' }).click();
+    const box = await page.locator('[data-ask="議事録本文"]').inputValue();
+    assert.match(box, /^【出席者】\n太田、國井\n\n【場所】\n/); assert.match(box, /【決定事項】\n・規制は9時から17時\n\n【ToDo】\n・10\/25まで 太田 見積を出す\n\n【次回予定】\nなし$/);
+    await page.locator('[data-ask="議事録本文"]').fill(box.replace('・夜間規制', '・夜間規制の時間（直した）'));   // 四角の中で、直せる
+    const [dl] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: '作成して保存' }).last().click()]);
+    const got = []; for await (const c of await dl.createReadStream()) got.push(c);
+    const xml = await (await JSZip.loadAsync(Buffer.concat(got))).file('word/document.xml').async('string');
+    const text = xml.replace(/<w:br\/>/g, '\n').replace(/<[^>]*>/g, '');
+    assert.match(text, /日時：\d{4}年\d{1,2}月\d{1,2}日　作成者：くに/, '打合せ日と作成者は、自動で入る');
+    assert.match(text, /【議題】\n・夜間規制の時間（直した）/, '直した内容が、Wordに入る');
+    assert.ok((xml.match(/<w:b\/>/g) || []).length >= 6, '見出しが太字');
+    assert.deepStrictEqual(errors, []);
+  } finally { await browser.close(); await mock.close(); }
+});

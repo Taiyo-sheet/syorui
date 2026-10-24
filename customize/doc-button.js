@@ -69,6 +69,15 @@
     if (kind === 'pptx') return lines.join('</a:t></a:r><a:br/><a:r>' + (rpr || '') + '<a:t>');
     return lines.join('\n');
   }
+  // 議事録本文：【見出し】だけの行を太字にし、ほかは、改行でつなぐ（Word用）
+  function toXmlMinutes(v) {
+    var lines = cleanValue(v).split(/\r?\n/);
+    var parts = lines.map(function (l) {
+      var t = escXml(l);
+      return /^【[^】]+】$/.test(l.trim()) ? '</w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">' + t + '</w:t></w:r><w:r><w:t xml:space="preserve">' : t;
+    });
+    return parts.join('</w:t><w:br/><w:t xml:space="preserve">');
+  }
   function decodeLabel(s) {
     return s.replace(/&#x([0-9a-f]+);/gi, function (m, h) { return String.fromCodePoint(parseInt(h, 16)); })
       .replace(/&#(\d+);/g, function (m, d) { return String.fromCodePoint(parseInt(d, 10)); })
@@ -91,6 +100,7 @@
       var label = decodeLabel(inner.replace(/<[^>]*>/g, ''));
       if (Object.prototype.hasOwnProperty.call(values, label)) {
         if (empty && String(values[label]).trim() === '' && empty.indexOf(label) < 0) empty.push(label);
+        if (label === '議事録本文' && kind === 'docx') return toXmlMinutes(values[label]);
         return toXmlText(values[label], kind, kind === 'pptx' ? lastRunProps(str, offset) : '');
       }
       if (unknown && unknown.indexOf(label) < 0) unknown.push(label);
@@ -149,6 +159,7 @@
   //   init ：入力欄の初めの値（関数なら、開いたときに決める）
   function loginName() { try { return kintone.getLoginUser().name || ''; } catch (e) { return ''; } }
   var ASK = [
+    { key: '議事録本文', label: '議事録（まとまって入ります。ここで、直せます）', type: 'doc' },
     { key: '打合せ日', label: '打合せ日（初期値は今日）', type: 'date', blank: function () { return today(); } },
     { key: '場所', label: '場所', type: 'text' },
     { key: '出席者', label: '出席者（分からなければ空のまま→「不明」）', type: 'text', blank: '不明' },
@@ -238,6 +249,14 @@
     };
   }
 
+  // 項目に分けた結果を、見出し付きの、ひとかたまりの文章にする
+  var MINUTES_ORDER = [['出席者', '出席者', '不明'], ['場所', '場所', ''], ['議題', '議題', 'なし'], ['議事録メモ', '打合せ内容', 'なし'], ['決定事項', '決定事項', 'なし'], ['ToDo', 'ToDo', 'なし'], ['次回予定', '次回予定', 'なし']];
+  function formatMinutes(res) {
+    return MINUTES_ORDER.map(function (o) {
+      var v = String((res && res[o[0]]) || '').trim() || o[2];
+      return '【' + o[1] + '】\n' + v;
+    }).join('\n\n');
+  }
   // 箇条書きの記号（- * ● • ・）をそろえる。空行は取り除く
   function tidyMemo(t) {
     return String(t || '').split(/\r?\n/).map(function (l) { return l.trim(); }).filter(Boolean)
@@ -307,7 +326,7 @@
   // Node（テスト）から使うときは、ここまでの部品だけを渡して終わる
   if (typeof kintone === 'undefined') {
     if (typeof module !== 'undefined' && module.exports) {
-      module.exports = { maskForAI: maskForAI, summarizeLocal: summarizeLocal, checkText: checkText, extractText: extractText, tidyMemo: tidyMemo, fieldText: fieldText, replacePlaceholders: replacePlaceholders, fillTemplate: fillTemplate, hasPlaceholders: hasPlaceholders, guessTarget: guessTarget, buildFilename: buildFilename, buildValues: buildValues, quote: quote, SUB: SUB, MF: MF, today: today };
+      module.exports = { formatMinutes: formatMinutes, maskForAI: maskForAI, summarizeLocal: summarizeLocal, checkText: checkText, extractText: extractText, tidyMemo: tidyMemo, fieldText: fieldText, replacePlaceholders: replacePlaceholders, fillTemplate: fillTemplate, hasPlaceholders: hasPlaceholders, guessTarget: guessTarget, buildFilename: buildFilename, buildValues: buildValues, quote: quote, SUB: SUB, MF: MF, today: today };
     }
     return;
   }
@@ -675,8 +694,11 @@
           var card = el('div', 'background:#fff;max-width:560px;margin:40px auto;border-radius:8px;padding:16px;font-size:14px;box-sizing:border-box;width:calc(100% - 24px)');
           card.appendChild(el('div', 'font-weight:bold;font-size:16px;margin-bottom:10px', '「' + name + '」の内容'));
           var inputs = {};
-          var isMinutes = asks.some(function (a) { return a.key === '議事録メモ'; });
+          var single = asks.some(function (a) { return a.key === '議事録本文'; });   // 議事録本文：ひとつの四角に、見出し付きで、まとめて入れる
+          var isMinutes = single || asks.some(function (a) { return a.key === '議事録メモ'; });
+          var shown = single ? asks.filter(function (a) { return a.key === '議事録本文'; }) : asks;   // 打合せ日・作成者などは、入力欄を出さず、自動で入れる
           var fillFrom = function (res) {
+            if (inputs['議事録本文']) { inputs['議事録本文'].value = formatMinutes(res); return; }
             Object.keys(res).forEach(function (key) { if (inputs[key] && res[key]) inputs[key].value = res[key]; });
           };
           if (isMinutes) {
@@ -715,9 +737,9 @@
             });
             tools.appendChild(easy); tools.appendChild(ai); tools.appendChild(note); card.appendChild(tools);
           }
-          asks.forEach(function (a) {
+          shown.forEach(function (a) {
             card.appendChild(el('div', 'font-size:12px;color:#666;margin-top:8px', a.label));
-            var inp = a.type === 'memo' ? el('textarea', 'width:100%;height:160px;box-sizing:border-box;font-size:14px;padding:6px') : el('input', 'width:100%;box-sizing:border-box;font-size:14px;padding:6px');
+            var inp = a.type === 'doc' ? el('textarea', 'width:100%;height:340px;box-sizing:border-box;font-size:14px;padding:8px;line-height:1.5') : a.type === 'memo' ? el('textarea', 'width:100%;height:160px;box-sizing:border-box;font-size:14px;padding:6px') : el('input', 'width:100%;box-sizing:border-box;font-size:14px;padding:6px');
             if (a.type === 'date') { inp.type = 'date'; inp.value = isoToday(); } else if (a.type === 'text') { inp.type = 'text'; if (a.init) inp.value = a.init(); }
             inp.setAttribute('data-ask', a.key); inputs[a.key] = inp; card.appendChild(inp);
           });
@@ -729,9 +751,10 @@
           ok.addEventListener('click', function () {
             var v = {};
             asks.forEach(function (a) {
+              if (!inputs[a.key]) { v[a.key] = askDefault(a); return; }   // 入力欄を出さなかった項目は、初期値（打合せ日は今日、作成者は開いた人）
               var t = inputs[a.key].value;
               if (a.type === 'date') { var m = t.match(/^(\d{4})-(\d{2})-(\d{2})$/); t = m ? m[1] + '年' + Number(m[2]) + '月' + Number(m[3]) + '日' : t; }
-              v[a.key] = a.type === 'memo' ? tidyMemo(t) : t.trim();
+              v[a.key] = a.type === 'memo' ? tidyMemo(t) : a.type === 'doc' ? t.replace(/\s+$/, '') : t.trim();
               if (!v[a.key]) v[a.key] = askDefault(a);
             });
             close(v);
