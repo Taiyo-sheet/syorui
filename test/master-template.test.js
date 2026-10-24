@@ -24,21 +24,23 @@ const FAKE = `
   var h = {};
   window.kintone = {
     api: api, getRequestToken: function () { return 'tok'; },
-    events: { on: function (n, fn) { h[n] = fn; } },
+    events: { on: function (n, fn) { [].concat(n).forEach(function (x) { h[x] = fn; }); } },
     app: { getId: function () { return 10; }, getHeaderMenuSpaceElement: function () { return document.getElementById('hdr'); },
-      record: { getHeaderMenuSpaceElement: function () { return document.getElementById('hdr'); } } }
+      record: { getHeaderMenuSpaceElement: function () { return document.getElementById('hdr'); } } },
+    mobile: { app: { getId: function () { return 10; }, getHeaderSpaceElement: function () { return document.getElementById('hdr'); } } }
   };
+  if (/nohost/.test(location.search)) { window.kintone.app.getHeaderMenuSpaceElement = function () { return null; }; window.kintone.app.record.getHeaderMenuSpaceElement = function () { return null; }; }
   window.__fire = function (n, ev) { return h[n](ev); };
 `;
 
 const names = (mock, id) => mock.state.records['10'].find((r) => r.$id.value === String(id))['雛形'].value.map((f) => f.name);
 
-async function setup(mock, url, browser) {
+async function setup(mock, url, browser, path) {
   const ctx = await browser.newContext(); const page = await ctx.newPage();
   const errors = []; page.on('pageerror', (e) => errors.push(e.message));
   const dialogs = []; page.on('dialog', (d) => { dialogs.push(d.message()); d.accept(); });
   await page.addInitScript(FAKE);
-  await page.goto(url + '/__page');
+  await page.goto(url + (path || '/__page'));
   await page.addScriptTag({ content: fs.readFileSync(require.resolve('jszip/dist/jszip.min.js'), 'utf8') });
   await page.addScriptTag({ content: fs.readFileSync(__dirname + '/../customize/master-template.js', 'utf8') });
   await page.addScriptTag({ content: fs.readFileSync(__dirname + '/../customize/doc-button.js', 'utf8') });   // 書類マスタでは、master-template.js の後ろに登録する
@@ -170,5 +172,30 @@ test('書類マスタ：試しに作る（見本の案件を選ぶ→記入済�
     assert.match(xml, /第二多摩川橋 補修工事/); assert.match(xml, /東京都調布市/); assert.match(xml, /v0（試し）/); assert.match(xml, /【入力欄：決定事項】/);
     assert.strictEqual(JSON.stringify(mock.state.records), before, '案件くんにも書類マスタにも、何も書き込まない');
     assert.deepStrictEqual(errors, []);
+  } finally { await browser.close(); await mock.close(); }
+});
+
+test('書類マスタ：スマホ（モバイル）でも、ボタンが出て、差し替えられる／場所が見つからなくても、帯でボタンが出る', { skip }, async () => {
+  const mock = createMock(); const url = await mock.listen();
+  const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
+  try {
+    mock.addApp('10', '書類マスタ'); addAnken(mock);
+    const k1 = mock.addFile(Buffer.from('OLD'), '旧.docx');
+    const id = mock.addRecord('10', { 書類名: { value: 'あ' }, 雛形: { value: [{ fileKey: k1, name: '旧.docx' }] } });
+    // スマホ
+    let t = await setup(mock, url, browser, '/k/m/__page');
+    await t.page.evaluate((r) => window.__fire('mobile.app.record.detail.show', { record: r }), mock.state.records['10'][0]);
+    assert.strictEqual(await t.page.locator('[data-master-swap]').count(), 1, 'スマホの詳細にボタン');
+    assert.strictEqual(await t.page.locator('[data-master-try]').count(), 1);
+    await choose(t.page, () => t.page.locator('[data-master-swap]').click(), { name: 'm.docx', mimeType: 'application/octet-stream', buffer: await docxWith('{{工事名称}}') });
+    await t.page.getByText(/差し替えました/).waitFor();
+    assert.strictEqual(names(mock, id)[0], 'm.docx');
+    await t.page.evaluate(() => window.__fire('mobile.app.record.index.show', {}));
+    assert.strictEqual(await t.page.locator('[data-master-bulk]').count(), 1, 'スマホの一覧にボタン');
+    assert.deepStrictEqual(t.errors, []);
+    // ボタンの置き場所が見つからない（PC）
+    t = await setup(mock, url, browser, '/__page?nohost=1');
+    await t.page.evaluate((r) => window.__fire('app.record.detail.show', { record: r }), mock.state.records['10'][0]);
+    assert.strictEqual(await t.page.locator('[data-master-bar] [data-master-swap]').count(), 1, '帯の中に、ボタンが出る');
   } finally { await browser.close(); await mock.close(); }
 });

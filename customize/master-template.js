@@ -89,7 +89,7 @@ window.__TS_DOC_ENGINE_ONLY = true;
         });
       }, Promise.resolve()).then(function () { return upload(buf, file.name); }).then(function (newKey) {
         var next = [{ fileKey: newKey }].concat(keep.slice(0, KEEP));
-        var body = { app: kintone.app.getId(), id: id, record: {} };
+        var body = { app: appId(), id: id, record: {} };
         body.record[FILE_FIELD] = { value: next };
         if (rec.$revision) body.revision = rec.$revision.value;
         return api('PUT', '/k/v1/record', body);
@@ -131,16 +131,34 @@ window.__TS_DOC_ENGINE_ONLY = true;
     });
   }
 
+  // PC・スマホ（モバイル）の、どちらの画面でも動かす
+  var isMobile = /^\/k\/(guest\/\d+\/)?m\//.test(location.pathname);
+  function appId() { return isMobile ? kintone.mobile.app.getId() : kintone.app.getId(); }
+  // ボタンを置く場所：画面の上の、ボタン置き場。見つからないときは、画面の上に、帯を出す（ボタンが、出ないことが、ないように）
+  function hostFor(kind) {
+    var h = null;
+    try {
+      if (isMobile) h = kintone.mobile.app.getHeaderSpaceElement && kintone.mobile.app.getHeaderSpaceElement();
+      else if (kind === 'detail') h = kintone.app.record.getHeaderMenuSpaceElement && kintone.app.record.getHeaderMenuSpaceElement();
+      else h = kintone.app.getHeaderMenuSpaceElement && kintone.app.getHeaderMenuSpaceElement();
+    } catch (e) { h = null; }
+    if (h) return h;
+    var bar = document.querySelector('[data-master-bar]');
+    if (!bar) { bar = el('div', 'position:fixed;left:8px;right:8px;top:8px;z-index:9000;background:#fff;border:1px solid #ccc;border-radius:6px;padding:6px 8px;box-shadow:0 2px 8px rgba(0,0,0,.2)'); bar.setAttribute('data-master-bar', '1'); document.body.appendChild(bar); }
+    return bar;
+  }
+  function guard(fn) { return function (event) { try { return fn(event) || event; } catch (e) { console.error('[master-template]', e); return event; } }; }
+
   function button(text, attr, onClick) {
-    var b = el('button', 'margin:0 8px 0 0;padding:6px 12px;font-size:13px;cursor:pointer', text);
+    var b = el('button', isMobile ? 'margin:4px 8px 4px 0;padding:10px 14px;font-size:15px;cursor:pointer' : 'margin:0 8px 0 0;padding:6px 12px;font-size:13px;cursor:pointer', text);
     b.type = 'button'; b.setAttribute(attr, '1'); b.addEventListener('click', onClick);
     return b;
   }
   function note(host) { var n = el('span', 'font-size:12px;margin-left:4px;color:#1f7a3d'); n.setAttribute('data-master-note', '1'); host.appendChild(n); return n; }
 
   // ---- 詳細画面：この書類の雛形を差し替える ----
-  kintone.events.on('app.record.detail.show', function (event) {
-    var host = kintone.app.record.getHeaderMenuSpaceElement && kintone.app.record.getHeaderMenuSpaceElement();
+  kintone.events.on(['app.record.detail.show', 'mobile.app.record.detail.show'], guard(function (event) {
+    var host = hostFor('detail');
     if (!host || host.querySelector('[data-master-swap]')) return event;
     var rec = event.record, name = rec[NAME_FIELD] && rec[NAME_FIELD].value;
     var msg = null;
@@ -161,7 +179,7 @@ window.__TS_DOC_ENGINE_ONLY = true;
     host.appendChild(button('試しに作る', 'data-master-try', function () { tryPanel(rec, name, msg); }));
     msg = note(host);
     return event;
-  });
+  }));
 
   // ---- 試しに作る：見本の案件を選ぶと、いまの雛形で、記入済みの書類を、その場で作って、点検する（どこにも、保存しない） ----
   function tryPanel(rec, name, msg) {
@@ -237,15 +255,15 @@ window.__TS_DOC_ENGINE_ONLY = true;
   }
 
   // ---- 一覧画面：複数のファイルを、まとめて差し替える ----
-  kintone.events.on('app.record.index.show', function (event) {
-    var host = kintone.app.getHeaderMenuSpaceElement && kintone.app.getHeaderMenuSpaceElement();
+  kintone.events.on(['app.record.index.show', 'mobile.app.record.index.show'], guard(function (event) {
+    var host = hostFor('index');
     if (!host || host.querySelector('[data-master-bulk]')) return event;
     var msg = null;
     host.appendChild(button('雛形をまとめて差し替える', 'data-master-bulk', function () {
       msg.style.color = '#1f7a3d'; msg.textContent = '';
       pickFiles(true).then(function (files) {
         if (!files.length) return;
-        return api('GET', '/k/v1/records', { app: kintone.app.getId(), query: 'limit 500' }).then(function (res) {
+        return api('GET', '/k/v1/records', { app: appId(), query: 'limit 500' }).then(function (res) {
           var byName = {}; res.records.forEach(function (r) { var n = r[NAME_FIELD].value; (byName[n] = byName[n] || []).push(r); });
           var plan = [], skip = [];
           files.forEach(function (f) {
@@ -278,5 +296,5 @@ window.__TS_DOC_ENGINE_ONLY = true;
     }));
     msg = note(host);
     return event;
-  });
+  }));
 })();
