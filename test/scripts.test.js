@@ -189,32 +189,6 @@ test('add-doc-storage：確認だけでは変えない／バックアップな�
   });
 });
 
-test('add-button-space：書類関係の行の下にスペースを足す／既存は変わらない／バックアップなしは止まる／2回目は止まる', async () => {
-  await withMock(async (mock, env) => {
-    const layout = [
-      { type: 'ROW', fields: [{ type: 'LABEL', label: '<b>案件</b>', elementId: '' }] },
-      { type: 'ROW', fields: [{ type: 'LABEL', label: '<b>&#x1f4d7;書類関係&#x1f4d7;</b>', elementId: '' }, { type: 'FILE', code: '安全書類格納' }] },
-      { type: 'ROW', fields: [{ type: 'LABEL', label: '<b>施工店管理</b>', elementId: '' }] },
-      { type: 'SUBTABLE', code: '書類保管', fields: [] },
-    ];
-    mock.addApp('575', '案件くん'); mock.state.apps['575'].layout = JSON.parse(JSON.stringify(layout));
-    let r = await run('add-button-space.js', [], env);
-    assert.strictEqual(r.code, 0, r.out); assert.match(r.out, /確認だけです/);
-    assert.strictEqual(mock.state.apps['575'].layout.length, 4);
-    r = await run('add-button-space.js', ['--yes'], env);
-    assert.strictEqual(r.code, 2, r.out); assert.match(r.out, /バックアップがありません/);
-    r = await run('backup-app.js', [], env); assert.strictEqual(r.code, 0, r.out);
-    r = await run('add-button-space.js', ['--yes'], env);
-    assert.strictEqual(r.code, 0, r.out); assert.match(r.out, /OK ボタン用のスペースを足しました/);
-    const L = mock.state.apps['575'].layout;
-    assert.strictEqual(L.length, 5);
-    assert.strictEqual(L[2].fields[0].elementId, 'doc_button_space', '書類関係の行の、すぐ下');
-    assert.deepStrictEqual(L.filter((x, i) => i !== 2), layout, 'ほかの並びは同じ');
-    r = await run('add-button-space.js', ['--yes'], env);
-    assert.strictEqual(r.code, 2, r.out); assert.match(r.out, /すでにあります/);
-  });
-});
-
 test('template-tool：list／get／put（確認だけは変えない・差し替えで旧版が残る・旧版は3つまで）', async () => {
   await withMock(async (mock, env) => {
     const tpl = await build();

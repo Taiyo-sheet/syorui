@@ -36,9 +36,6 @@
   // 案件くんの項目のうち、「橋梁」「一般道路」など、書類マスタの「対象」と同じ言葉が入っているもの。
   // その項目名を入れると、案件を開いたときに、対象が自動で選ばれる（空のままなら、画面で手で選ぶ）
   var TARGET_LABEL = '';
-  // ボタンを置く場所：案件くんの「書類関係」タブの中に置いた「スペース」項目の要素ID（scripts/add-button-space.js で足す）。
-  // これがあれば、そのタブを開いたときだけボタンが見える。なければ、画面上部のヘッダーに出す
-  var BUTTON_SPACE_ID = 'doc_button_space';
   var STAGE_LABEL = '現在の工程';                      // 案件くんにこの項目があれば、その工程を最初に表示
 
   // ---------- 値の整形 ----------
@@ -285,7 +282,7 @@
   // Node（テスト）から使うときは、ここまでの部品だけを渡して終わる
   if (typeof kintone === 'undefined') {
     if (typeof module !== 'undefined' && module.exports) {
-      module.exports = { summarizeLocal: summarizeLocal, checkText: checkText, extractText: extractText, tidyMemo: tidyMemo, BUTTON_SPACE_ID: BUTTON_SPACE_ID, fieldText: fieldText, replacePlaceholders: replacePlaceholders, fillTemplate: fillTemplate, hasPlaceholders: hasPlaceholders, guessTarget: guessTarget, buildFilename: buildFilename, buildValues: buildValues, quote: quote, SUB: SUB, MF: MF, today: today };
+      module.exports = { summarizeLocal: summarizeLocal, checkText: checkText, extractText: extractText, tidyMemo: tidyMemo, fieldText: fieldText, replacePlaceholders: replacePlaceholders, fillTemplate: fillTemplate, hasPlaceholders: hasPlaceholders, guessTarget: guessTarget, buildFilename: buildFilename, buildValues: buildValues, quote: quote, SUB: SUB, MF: MF, today: today };
     }
     return;
   }
