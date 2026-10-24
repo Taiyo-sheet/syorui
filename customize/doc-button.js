@@ -213,7 +213,7 @@
   //   init ：入力欄の初めの値（関数なら、開いたときに決める）
   function loginName() { try { return kintone.getLoginUser().name || ''; } catch (e) { return ''; } }
   var ASK = [
-    { key: '議事録本文', label: '議事録（まとまって入ります。ここで、直せます）', type: 'doc' },
+    { key: '議事録本文', label: '③ まとまった議事録（この内容が、書類に入ります。ここで、直せます）', type: 'doc' },
     { key: '打合せ日', label: '打合せ日（初期値は今日）', type: 'date', blank: function () { return today(); } },
     { key: '場所', label: '場所', type: 'text' },
     { key: '出席者', label: '出席者（分からなければ空のまま→「不明」）', type: 'text', blank: '不明' },
@@ -745,7 +745,7 @@
   function askValues(asks, name) {
         return new Promise(function (resolve) {
           var cover = el('div', 'position:fixed;left:0;top:0;right:0;bottom:0;background:rgba(0,0,0,.45);z-index:10001;overflow:auto');
-          var card = el('div', 'background:#fff;max-width:560px;margin:40px auto;border-radius:8px;padding:16px;font-size:14px;box-sizing:border-box;width:calc(100% - 24px)');
+          var card = el('div', 'background:#fff;max-width:640px;margin:24px auto;border-radius:8px;padding:16px;font-size:14px;box-sizing:border-box;width:calc(100% - 24px)');
           card.appendChild(el('div', 'font-weight:bold;font-size:16px;margin-bottom:10px', '「' + name + '」の内容'));
           var inputs = {};
           var single = asks.some(function (a) { return a.key === '議事録本文'; });   // 議事録本文：ひとつの四角に、見出し付きで、まとめて入れる
@@ -756,8 +756,8 @@
             Object.keys(res).forEach(function (key) { if (inputs[key] && res[key]) inputs[key].value = res[key]; });
           };
           if (isMinutes) {
-            card.appendChild(el('div', 'font-size:12px;color:#666', '音声の文字起こしを、そのまま貼り付けて、下のボタンで、項目に分けられます（必ず、確認・修正してから、作成してください）'));
-            var src = el('textarea', 'width:100%;height:110px;box-sizing:border-box;font-size:13px;padding:6px;margin-top:4px;background:#f7fafc'); src.setAttribute('data-minutes-src', '1');
+            card.appendChild(el('div', 'font-size:14px;font-weight:bold;color:#1f3a6e;margin-top:4px', '① 音声の文字起こしを、ここに貼り付けます'));
+            var src = el('textarea', 'width:100%;height:300px;box-sizing:border-box;font-size:14px;padding:8px;margin-top:4px;line-height:1.5;background:#f7fafc'); src.setAttribute('data-minutes-src', '1');
             card.appendChild(src);
             // Copilot を使う場合：①依頼文をコピー → ②Copilot を開く → 依頼文と、文字起こしを貼る → できた文章を、上の欄に貼る → 「かんたん整理」
             var cop = el('div', 'margin:6px 0 2px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-size:12px');
@@ -777,6 +777,7 @@
             var ai = el('button', 'padding:6px 10px;font-size:12px;cursor:pointer;font-weight:bold', MINUTES_SERVER_URL ? 'AIで整理（外部のAIに送ります）' : 'AIで整理（未設定）'); ai.type = 'button'; ai.disabled = !MINUTES_SERVER_URL;
             var note = el('span', 'font-size:12px;color:#1f7a3d');
             var extra = el('input', 'width:100%;box-sizing:border-box;font-size:12px;padding:4px;margin-bottom:4px'); extra.type = 'text'; extra.placeholder = 'AIに送らず、伏せたい言葉（コンマ区切り。例：会社名、物件名）'; extra.setAttribute('data-mask-extra', '1');
+            card.appendChild(el('div', 'font-size:14px;font-weight:bold;color:#1f3a6e;margin-top:8px', '② 下のボタンで、整理します（整理した結果は、③に入ります）'));
             card.appendChild(extra);
             ai.addEventListener('click', function () {
               if (!src.value.trim()) { note.textContent = '文字起こしを、貼り付けてください'; return; }
@@ -792,8 +793,8 @@
             tools.appendChild(easy); tools.appendChild(ai); tools.appendChild(note); card.appendChild(tools);
           }
           shown.forEach(function (a) {
-            card.appendChild(el('div', 'font-size:12px;color:#666;margin-top:8px', a.label));
-            var inp = a.type === 'doc' ? el('textarea', 'width:100%;height:340px;box-sizing:border-box;font-size:14px;padding:8px;line-height:1.5') : a.type === 'memo' ? el('textarea', 'width:100%;height:160px;box-sizing:border-box;font-size:14px;padding:6px') : el('input', 'width:100%;box-sizing:border-box;font-size:14px;padding:6px');
+            card.appendChild(el('div', a.key === '議事録本文' ? 'font-size:14px;font-weight:bold;color:#1f3a6e;margin-top:8px' : 'font-size:12px;color:#666;margin-top:8px', a.label));
+            var inp = a.type === 'doc' ? el('textarea', 'width:100%;height:150px;box-sizing:border-box;font-size:14px;padding:8px;line-height:1.5') : a.type === 'memo' ? el('textarea', 'width:100%;height:160px;box-sizing:border-box;font-size:14px;padding:6px') : el('input', 'width:100%;box-sizing:border-box;font-size:14px;padding:6px');
             if (a.type === 'date') { inp.type = 'date'; inp.value = isoToday(); } else if (a.type === 'text') { inp.type = 'text'; if (a.init) inp.value = a.init(); }
             inp.setAttribute('data-ask', a.key); inputs[a.key] = inp; card.appendChild(inp);
           });
