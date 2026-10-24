@@ -78,3 +78,37 @@ test('pdf-server /minutes：鍵が無ければ503／許可した画面だけ／A
     });
   } finally { fake.close(); if (saved.k === undefined) delete process.env.ANTHROPIC_API_KEY; else process.env.ANTHROPIC_API_KEY = saved.k; if (saved.u === undefined) delete process.env.ANTHROPIC_BASE_URL; else process.env.ANTHROPIC_BASE_URL = saved.u; }
 });
+
+test('pdf-server /minutes（Vertex AI＝会社のGoogle Cloud）：鍵とプロジェクトが無ければ503／JWTでトークンを取り、日本のリージョンのURLを呼び、返事を項目に分ける', async () => {
+  const http = require('node:http'); const crypto = require('node:crypto');
+  const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const seen = { token: [], gen: [] };
+  const fake = http.createServer((req, res) => { const c = []; req.on('data', (x) => c.push(x)); req.on('end', () => {
+    const body = Buffer.concat(c).toString('utf8');
+    if (req.url === '/token') {
+      seen.token.push(body); const jwt = new URLSearchParams(body).get('assertion').split('.');
+      const ok = crypto.createVerify('RSA-SHA256').update(jwt[0] + '.' + jwt[1]).verify(publicKey, Buffer.from(jwt[2].replace(/-/g, '+').replace(/_/g, '/'), 'base64'));
+      res.writeHead(ok ? 200 : 401, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ access_token: 'tok-1' }));
+    }
+    seen.gen.push({ url: req.url, auth: req.headers.authorization, body: JSON.parse(body) });
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ candidates: [{ content: { parts: [{ text: '{"出席者":"太田","場所":"","議題":"・工程","議事録メモ":"・現調","決定事項":["・着工11月"],"ToDo":"","次回予定":""}' }] } }] }));
+  }); });
+  await new Promise((r) => fake.listen(0, '127.0.0.1', r)); const port = fake.address().port;
+  const keys = ['MINUTES_PROVIDER', 'GOOGLE_SERVICE_ACCOUNT_JSON', 'GOOGLE_CLOUD_PROJECT', 'GOOGLE_TOKEN_URL', 'VERTEX_BASE_URL', 'ANTHROPIC_API_KEY']; const saved = {}; keys.forEach((k) => { saved[k] = process.env[k]; });
+  try {
+    await withServer({}, async (base) => {
+      const post = (t) => fetch(base + '/minutes', { method: 'POST', headers: { Origin: ORIGIN, 'Content-Type': 'application/json' }, body: JSON.stringify({ text: t }) });
+      process.env.MINUTES_PROVIDER = 'vertex'; delete process.env.GOOGLE_SERVICE_ACCOUNT_JSON; delete process.env.GOOGLE_CLOUD_PROJECT; process.env.ANTHROPIC_API_KEY = 'x';
+      assert.strictEqual((await post('あ')).status, 503, 'Vertexの設定が無ければ、Anthropicの鍵があっても、動かない');
+      process.env.GOOGLE_SERVICE_ACCOUNT_JSON = JSON.stringify({ client_email: 'sa@p.iam.gserviceaccount.com', private_key: privateKey.export({ type: 'pkcs8', format: 'pem' }) });
+      process.env.GOOGLE_CLOUD_PROJECT = 'my-proj'; process.env.GOOGLE_TOKEN_URL = 'http://127.0.0.1:' + port + '/token'; process.env.VERTEX_BASE_URL = 'http://127.0.0.1:' + port;
+      const r = await post('今日は工程の確認をしました。'); assert.strictEqual(r.status, 200);
+      const j = await r.json(); assert.strictEqual(j['出席者'], '太田'); assert.strictEqual(j['決定事項'], '・着工11月', '配列は、改行でつなぐ');
+      assert.strictEqual(seen.token.length, 1); assert.strictEqual(seen.gen[0].auth, 'Bearer tok-1');
+      assert.match(seen.gen[0].url, /\/v1\/projects\/my-proj\/locations\/asia-northeast1\/publishers\/google\/models\/.+:generateContent$/, '日本（東京）のリージョン');
+      assert.strictEqual(seen.gen[0].body.generationConfig.responseMimeType, 'application/json');
+      assert.match(seen.gen[0].body.contents[0].parts[0].text, /今日は工程の確認/);
+    });
+  } finally { fake.close(); keys.forEach((k) => { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }); }
+});

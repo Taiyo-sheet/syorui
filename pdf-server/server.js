@@ -35,6 +35,42 @@ const MINUTES_SYSTEM = [
   '箇条書きは、各行の先頭を「・」にし、改行で区切ってください。「えー」「あの」などの言いよどみは、取り除いてください。'
 ].join('\n');
 const minutesModel = () => process.env.MINUTES_MODEL || 'claude-sonnet-5-5';
+const crypto = require('crypto');
+const b64u = (x) => Buffer.from(x).toString('base64').replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
+// 議事録のAIの呼び先：MINUTES_PROVIDER=anthropic（初期値）／vertex（会社のGoogle Cloud の Vertex AI＝Gemini。日本のリージョンで使う）
+const provider = () => (process.env.MINUTES_PROVIDER || 'anthropic').toLowerCase();
+const aiReady = () => provider() === 'vertex' ? !!(process.env.GOOGLE_SERVICE_ACCOUNT_JSON && process.env.GOOGLE_CLOUD_PROJECT) : !!process.env.ANTHROPIC_API_KEY;
+function toMinutes(raw) {
+  const m = String(raw || '').match(/\{[\s\S]*\}/);
+  if (!m) throw new Error('ai-no-json');
+  const obj = JSON.parse(m[0]); const out = {};
+  MINUTES_KEYS.forEach((k) => { const v = obj[k]; out[k] = Array.isArray(v) ? v.join('\n') : (v == null ? '' : String(v)); });
+  return out;
+}
+// Google のサービスアカウントの鍵（JSON）から、アクセストークンを作る（外部のライブラリを使わない）
+async function googleToken() {
+  const sa = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
+  const now = Math.floor(Date.now() / 1000);
+  const head = b64u(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
+  const claim = b64u(JSON.stringify({ iss: sa.client_email, scope: 'https://www.googleapis.com/auth/cloud-platform', aud: sa.token_uri || 'https://oauth2.googleapis.com/token', iat: now, exp: now + 3000 }));
+  const sig = crypto.createSign('RSA-SHA256').update(head + '.' + claim).sign(sa.private_key);
+  const r = await fetch(process.env.GOOGLE_TOKEN_URL || sa.token_uri || 'https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: 'grant_type=' + encodeURIComponent('urn:ietf:params:oauth:grant-type:jwt-bearer') + '&assertion=' + head + '.' + claim + '.' + b64u(sig) });
+  if (!r.ok) throw new Error('google-token-' + r.status);
+  return (await r.json()).access_token;
+}
+async function callVertex(text) {
+  const loc = process.env.GOOGLE_CLOUD_LOCATION || 'asia-northeast1';   // 東京
+  const base = (process.env.VERTEX_BASE_URL || 'https://' + loc + '-aiplatform.googleapis.com').replace(/\/$/, '');
+  const model = process.env.MINUTES_MODEL || 'gemini-2.5-flash';
+  const url = base + '/v1/projects/' + encodeURIComponent(process.env.GOOGLE_CLOUD_PROJECT) + '/locations/' + loc + '/publishers/google/models/' + encodeURIComponent(model) + ':generateContent';
+  const r = await fetch(url, {
+    method: 'POST', headers: { authorization: 'Bearer ' + (await googleToken()), 'content-type': 'application/json' },
+    body: JSON.stringify({ systemInstruction: { parts: [{ text: MINUTES_SYSTEM }] }, contents: [{ role: 'user', parts: [{ text: '【文字起こし】\n' + text }] }], generationConfig: { temperature: 0.2, responseMimeType: 'application/json' } }),
+  });
+  if (!r.ok) throw new Error('vertex-status-' + r.status);
+  const j = await r.json();
+  return toMinutes((((j.candidates || [])[0] || {}).content || {}).parts ? j.candidates[0].content.parts.map((x) => x.text || '').join('') : '');
+}
 async function callMinutesAI(text) {
   const base = (process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com').replace(/\/$/, '');
   const r = await fetch(base + '/v1/messages', {
@@ -45,12 +81,7 @@ async function callMinutesAI(text) {
   if (!r.ok) throw new Error('ai-status-' + r.status);
   const j = await r.json();
   const raw = ((j.content || []).find((c) => c.type === 'text') || {}).text || '';
-  const m = raw.match(/\{[\s\S]*\}/);
-  if (!m) throw new Error('ai-no-json');
-  const obj = JSON.parse(m[0]);
-  const out = {};
-  MINUTES_KEYS.forEach((k) => { const v = obj[k]; out[k] = Array.isArray(v) ? v.join('\n') : (v == null ? '' : String(v)); });
-  return out;
+  return toMinutes(raw);
 }
 const TIMEOUT_MS = 60000;
 
@@ -91,7 +122,7 @@ function createServer(opts) {
     }
     if (req.method === 'POST' && u.pathname === '/minutes') {
       if (!originOk && !keyOk) return send(403, 'forbidden');
-      if (!process.env.ANTHROPIC_API_KEY) return send(503, 'AIの整理は、まだ設定されていません');
+      if (!aiReady()) return send(503, 'AIの整理は、まだ設定されていません');
       const parts = []; let n = 0, over = false;
       req.on('data', (c) => { n += c.length; if (n > MAX_MINUTES_CHARS * 4) { over = true; send(413, '長すぎます'); req.destroy(); } else parts.push(c); });
       req.on('end', async () => {
@@ -99,7 +130,7 @@ function createServer(opts) {
         let text = ''; try { text = String(JSON.parse(Buffer.concat(parts).toString('utf8')).text || ''); } catch (e) { return send(400, 'JSONではありません'); }
         if (!text.trim()) return send(400, '文字起こしが空です');
         if (text.length > MAX_MINUTES_CHARS) return send(413, '長すぎます（' + MAX_MINUTES_CHARS + '文字まで）');
-        try { send(200, JSON.stringify(await callMinutesAI(text)), 'application/json; charset=utf-8'); }
+        try { send(200, JSON.stringify(provider() === 'vertex' ? await callVertex(text) : await callMinutesAI(text)), 'application/json; charset=utf-8'); }
         catch (e) { send(502, 'AIの整理に失敗しました'); console.error('minutes failed:', e.message); }   // 文章の中身は、ログに出さない
       });
       return;
