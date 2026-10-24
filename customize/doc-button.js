@@ -165,7 +165,39 @@
   function askDefault(a) { return typeof a.blank === 'function' ? a.blank() : (a.blank || ''); }
   // 音声の文字起こしを、議事録の項目に分ける（簡易版。外部には送りません。精度は高くないので、必ず、確認・修正してから作成する）
   //   戻り値：{ 出席者, 場所, 議題, 議事録メモ, 決定事項, ToDo, 次回予定 }（見つからなかった項目は、空）
+  // 見出し（【決定事項】■ToDo など）が付いた文章（Copilot や Teams の「まとめ」を、見出し付きで出したもの）は、見出しごとに、そのまま振り分ける
+  var HEAD = [
+    ['出席者', /^(出席者|参加者|出席)$/], ['場所', /^(場所|会場|開催場所)$/], ['議題', /^(議題|アジェンダ|テーマ|目的)$/],
+    ['議事録メモ', /^(打合せ内容|打ち合わせ内容|内容|議事|議事録|要点|概要|討議内容|協議内容|ディスカッション|主な内容)$/],
+    ['決定事項', /^(決定事項|決定|合意事項|合意)$/], ['ToDo', /^(todo|to-do|やること|宿題|宿題事項|アクション|アクションアイテム|アクション項目|対応事項|今後の対応)$/i],
+    ['次回予定', /^(次回予定|次回|次回打合せ|次回の打合せ|次のステップ)$/]
+  ];
+  function headOf(line) {
+    var t = line.replace(/^[\s#＃■□◆◇●○▼▽【\[（(「*・\-]+/, '').replace(/[\s】\]）)」:：]+$/, '').replace(/^[0-9０-９]+[.．、)）]\s*/, '').trim();
+    for (var i = 0; i < HEAD.length; i++) { if (HEAD[i][1].test(t)) return HEAD[i][0]; }
+    return '';
+  }
+  function summarizeByHeadings(text) {
+    var lines = String(text || '').replace(/\r/g, '').split('\n').map(function (l) { return l.trim(); }).filter(Boolean);
+    var onlyHeads = lines.filter(function (l) { return headOf(l); }).length;
+    if (onlyHeads < 2) return null;   // 見出しだけの行が、2つ以上あるときだけ、見出しで振り分ける
+    var out = { '出席者': [], '場所': [], '議題': [], '議事録メモ': [], '決定事項': [], 'ToDo': [], '次回予定': [] }, cur = '';
+    lines.forEach(function (line) {
+      var hk = headOf(line);
+      if (hk) { cur = hk; return; }
+      var inl = line.match(/^[\s■□◆◇●○▼▽【\[#＃*・\-]*([^:：】\]\s]{1,10})[】\]]?\s*[:：]?\s*(.+)$/);   // 「【次回予定】次回は…」「決定事項：…」のように、同じ行に中身がある
+      if (inl && headOf(inl[1])) { cur = headOf(inl[1]); out[cur].push(inl[2].trim()); return; }
+      if (cur) out[cur].push(line.replace(/^[\s・\-*●•‣]+/, '').trim());
+    });
+    var res = {};
+    Object.keys(out).forEach(function (k) {
+      var list = out[k].filter(Boolean);
+      res[k] = (k === '出席者' || k === '場所' || k === '次回予定') ? list.join('、') : list.map(function (l) { return '・' + l; }).join('\n');
+    });
+    return res;
+  }
   function summarizeLocal(text) {
+    var byHead = summarizeByHeadings(text); if (byHead) return byHead;
     var out = { '出席者': '', '場所': '', '議題': [], '議事録メモ': [], '決定事項': [], 'ToDo': [], '次回予定': '' };
     var FILLER = /^(えー+|あー+|えっと|あの+|その+|まあ|はい|ええ|うん|そうですね)[、。,\s]*/;
     String(text || '').replace(/\r/g, '').split(/\n|(?<=[。！？!?])/).forEach(function (raw) {

@@ -160,3 +160,13 @@ test('summarizeLocal：文字起こしを、決定事項・ToDo・次回予定�
   assert.match(r['次回予定'], /11月1日/);
   assert.deepStrictEqual(lib.summarizeLocal(''), { '出席者': '', '場所': '', '議題': '', '議事録メモ': '', '決定事項': '', 'ToDo': '', '次回予定': '' });
 });
+
+test('summarizeLocal：見出し付き（Copilot などの、まとめ）は、見出しごとに振り分ける', () => {
+  const t = '【出席者】太田、國井\n【場所】現場事務所\n【議題】\n・工程の確認\n【打合せ内容】\n・来週、現地調査\n・資料は金曜までに送付\n【決定事項】\n- 着工は11月上旬\n【ToDo】\n・10/25まで 太田 見積を出す\n【次回予定】次回は11月1日';
+  const r = lib.summarizeLocal(t);
+  assert.strictEqual(r['出席者'], '太田、國井'); assert.strictEqual(r['場所'], '現場事務所');
+  assert.strictEqual(r['議題'], '・工程の確認'); assert.strictEqual(r['議事録メモ'], '・来週、現地調査\n・資料は金曜までに送付');
+  assert.strictEqual(r['決定事項'], '・着工は11月上旬'); assert.strictEqual(r['ToDo'], '・10/25まで 太田 見積を出す'); assert.strictEqual(r['次回予定'], '次回は11月1日');
+  const r2 = lib.summarizeLocal('## 決定事項\n1. 着工は11月上旬\n## アクションアイテム\n- 太田：見積を送る（10/25）');
+  assert.strictEqual(r2['決定事項'], '・1. 着工は11月上旬'); assert.strictEqual(r2['ToDo'], '・太田：見積を送る（10/25）');
+});
