@@ -213,6 +213,31 @@
     return out;
   }
 
+  // 外部のAIに送る前に、個人情報などを、符号（【人物1】【電話1】…）に置き換える。AIの返事が戻ったら、元の言葉に、戻す。
+  // 置き換えるもの：電話番号・メールアドレス・郵便番号・金額（〇円）・「〇〇さん／様／氏／君／くん」の名前・利用者が、指定した言葉
+  // ※ 敬称のない名前や、文脈で分かる情報は、置き換えられません（完全ではありません）。送る内容は、送る前に、画面で確認できます
+  function maskForAI(text, extraWords) {
+    var map = {}, counts = {}, src = String(text || '');
+    var put = function (kind, orig) {
+      for (var k in map) { if (map[k] === orig) return k; }
+      counts[kind] = (counts[kind] || 0) + 1; var tok = '【' + kind + counts[kind] + '】'; map[tok] = orig; return tok;
+    };
+    (extraWords || []).filter(Boolean).forEach(function (w) { src = src.split(w).join(put('伏せ', w)); });
+    src = src.replace(/0\d{1,4}[-ー－]\d{1,4}[-ー－]\d{3,4}/g, function (m) { return put('電話', m); });
+    src = src.replace(/[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}/g, function (m) { return put('メール', m); });
+    src = src.replace(/〒?\s?\d{3}[-ー－]\d{4}/g, function (m) { return put('郵便番号', m); });
+    src = src.replace(/[¥￥]\s?[\d,，]+|[\d,，.]+\s?(?:万円|千円|円)/g, function (m) { return put('金額', m); });
+    src = src.replace(/([一-龥々ァ-ヶー]{2,5})(さん|様|氏|君|くん|殿)/g, function (m, name, h) {
+      if (/^(お客|担当|先方|当方|各位|関係|責任|営業|現場|職長|元請|発注|下請|施主|所長|課長|部長)/.test(name)) return m;
+      return put('人物', name) + h;
+    });
+    return {
+      masked: src,
+      unmask: function (t) { return String(t || '').replace(/【(?:人物|電話|メール|郵便番号|金額|伏せ)\d+】/g, function (tok) { return map[tok] != null ? map[tok] : tok; }); },
+      count: Object.keys(map).length
+    };
+  }
+
   // 箇条書きの記号（- * ● • ・）をそろえる。空行は取り除く
   function tidyMemo(t) {
     return String(t || '').split(/\r?\n/).map(function (l) { return l.trim(); }).filter(Boolean)
@@ -282,7 +307,7 @@
   // Node（テスト）から使うときは、ここまでの部品だけを渡して終わる
   if (typeof kintone === 'undefined') {
     if (typeof module !== 'undefined' && module.exports) {
-      module.exports = { summarizeLocal: summarizeLocal, checkText: checkText, extractText: extractText, tidyMemo: tidyMemo, fieldText: fieldText, replacePlaceholders: replacePlaceholders, fillTemplate: fillTemplate, hasPlaceholders: hasPlaceholders, guessTarget: guessTarget, buildFilename: buildFilename, buildValues: buildValues, quote: quote, SUB: SUB, MF: MF, today: today };
+      module.exports = { maskForAI: maskForAI, summarizeLocal: summarizeLocal, checkText: checkText, extractText: extractText, tidyMemo: tidyMemo, fieldText: fieldText, replacePlaceholders: replacePlaceholders, fillTemplate: fillTemplate, hasPlaceholders: hasPlaceholders, guessTarget: guessTarget, buildFilename: buildFilename, buildValues: buildValues, quote: quote, SUB: SUB, MF: MF, today: today };
     }
     return;
   }
@@ -660,13 +685,17 @@
             easy.addEventListener('click', function () { fillFrom(summarizeLocal(src.value)); note.textContent = '簡易に分けました。内容を、確認・修正してください。'; });
             var ai = el('button', 'padding:6px 10px;font-size:12px;cursor:pointer;font-weight:bold', MINUTES_SERVER_URL ? 'AIで整理（外部のAIに送ります）' : 'AIで整理（未設定）'); ai.type = 'button'; ai.disabled = !MINUTES_SERVER_URL;
             var note = el('span', 'font-size:12px;color:#1f7a3d');
+            var extra = el('input', 'width:100%;box-sizing:border-box;font-size:12px;padding:4px;margin-bottom:4px'); extra.type = 'text'; extra.placeholder = 'AIに送らず、伏せたい言葉（コンマ区切り。例：会社名、物件名）'; extra.setAttribute('data-mask-extra', '1');
+            card.appendChild(extra);
             ai.addEventListener('click', function () {
               if (!src.value.trim()) { note.textContent = '文字起こしを、貼り付けてください'; return; }
-              if (!confirm('貼り付けた文章を、外部のAIに送って、整理します。よろしいですか？')) return;
+              var mk = maskForAI(src.value, extra.value.split(/[,、，]/).map(function (x) { return x.trim(); }));
+              var preview = mk.masked.length > 400 ? mk.masked.slice(0, 400) + '…（以下、省略）' : mk.masked;
+              if (!confirm('次の内容を、外部のAIに送って、整理します（電話番号・メール・金額・「〇〇さん」の名前などは、符号に置き換えて、送ります。結果は、元の言葉に戻します）。\n\n【送る内容】\n' + preview + '\n\nよろしいですか？')) return;
               ai.disabled = true; note.textContent = 'AIが、整理しています…';
-              fetch(MINUTES_SERVER_URL.replace(/\/$/, '') + '/minutes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: src.value }) })
+              fetch(MINUTES_SERVER_URL.replace(/\/$/, '') + '/minutes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: mk.masked }) })
                 .then(function (r) { if (!r.ok) throw new Error('AIの整理に失敗しました（' + r.status + '）'); return r.json(); })
-                .then(function (res) { fillFrom(res); ai.disabled = false; note.textContent = 'AIが分けました。内容を、確認・修正してください（AIの案です。間違いが、含まれる可能性があります）。'; })
+                .then(function (res) { Object.keys(res).forEach(function (k) { res[k] = mk.unmask(res[k]); }); fillFrom(res); ai.disabled = false; note.textContent = 'AIが分けました（置き換えた言葉 ' + mk.count + ' 個は、元に戻しました）。内容を、確認・修正してください（AIの案です。間違いが、含まれる可能性があります）。'; })
                 .catch(function (e) { ai.disabled = false; note.style.color = '#c0392b'; note.textContent = (e && e.message) || 'AIの整理に失敗しました'; });
             });
             tools.appendChild(easy); tools.appendChild(ai); tools.appendChild(note); card.appendChild(tools);

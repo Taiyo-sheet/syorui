@@ -744,12 +744,19 @@ test('画面：議事録に、音声の文字起こしを貼り付けると、�
     assert.strictEqual(sent.length, 0, 'かんたん整理は、外部に何も送らない');
     // AI（サーバー設定あり）
     withAI = true; await open();
-    await page.locator('[data-minutes-src]').fill('適当な文字起こし');
+    await page.locator('[data-minutes-src]').fill('太田さんが03-1234-5678に連絡します。サンプル建設の件です。');
+    await page.locator('[data-mask-extra]').fill('サンプル建設');
+    const confirms = []; page.removeAllListeners('dialog'); page.on('dialog', (d) => { confirms.push(d.message()); d.accept(); });
     await page.getByRole('button', { name: 'AIで整理（外部のAIに送ります）' }).click();
     await page.getByText(/AIが分けました/).waitFor();
     assert.strictEqual(await page.locator('[data-ask="出席者"]').inputValue(), 'AI太田');
     assert.strictEqual(await page.locator('[data-ask="決定事項"]').inputValue(), '・AI決定');
     assert.strictEqual(sent.length, 1, 'AIを押したときだけ、送る');
+    assert.ok(confirms.some((m) => /【送る内容】/.test(m) && /【人物1】さん/.test(m) && !/太田/.test(m)), '送る前に、符号に置き換えた内容を、見せる：' + confirms.join('|'));
+    const body = mock.state.minutesBodies[0];
+    for (const bad of ['太田', '03-1234-5678', 'サンプル建設']) assert.ok(!body.includes(bad), 'AIに、' + bad + ' を、送らない：' + body);
+    assert.match(body, /【人物1】/);
+    assert.strictEqual(await page.locator('[data-ask="ToDo"]').inputValue(), '・太田さんが03-1234-5678に連絡', 'AIの返事の符号を、元の言葉に戻す');
     assert.deepStrictEqual(errors, []);
     await ctx.close();
   } finally { await browser.close(); await mock.close(); }

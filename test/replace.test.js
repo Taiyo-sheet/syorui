@@ -170,3 +170,13 @@ test('summarizeLocal：見出し付き（Copilot などの、まとめ）は、�
   const r2 = lib.summarizeLocal('## 決定事項\n1. 着工は11月上旬\n## アクションアイテム\n- 太田：見積を送る（10/25）');
   assert.strictEqual(r2['決定事項'], '・1. 着工は11月上旬'); assert.strictEqual(r2['ToDo'], '・太田：見積を送る（10/25）');
 });
+
+test('maskForAI：電話・メール・郵便番号・金額・「〇〇さん」の名前・指定した言葉を符号にし、返事で元に戻す', () => {
+  const t = '太田さんが03-1234-5678に連絡。メールは ota@example.co.jp。〒950-0000 新潟。金額は1,200,000円。担当の藤原様と、サンプル建設の件。皆さんお願いします。';
+  const m = lib.maskForAI(t, ['サンプル建設']);
+  for (const s of ['太田', '03-1234-5678', 'ota@example.co.jp', '950-0000', '1,200,000円', '藤原', 'サンプル建設']) assert.ok(!m.masked.includes(s), s + ' が、残っている：' + m.masked);
+  assert.match(m.masked, /【人物1】さん/); assert.match(m.masked, /皆さん/, '「皆さん」などは、人名として、扱わない');
+  assert.strictEqual(m.unmask('・' + m.masked.match(/【人物1】/)[0] + 'さんが、' + m.masked.match(/【電話1】/)[0] + 'に連絡'), '・太田さんが、03-1234-5678に連絡');
+  assert.strictEqual(m.unmask('【人物99】は、そのまま'), '【人物99】は、そのまま', '知らない符号は、そのまま');
+  assert.strictEqual(lib.maskForAI('', []).count, 0);
+});
