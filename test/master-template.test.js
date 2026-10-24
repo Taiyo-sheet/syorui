@@ -166,6 +166,7 @@ test('書類マスタ：試しに作る（見本の案件を選ぶ→記入済�
     await page.getByText(/点検の結果/).waitFor();
     const t = await page.locator('[data-try-panel]').textContent();
     assert.match(t, /案件くんにない項目名（空になります）：.*ないもの/, '雛形の打ち間違いを、指摘する');
+    assert.doesNotMatch(t, /置き換えられていない項目が残っています/, '同じ指摘を、2回出さない');
     const [dl] = await Promise.all([page.waitForEvent('download'), page.locator('[data-try-download]').click()]);
     const got = []; for await (const c of await dl.createReadStream()) got.push(c);
     const JSZip = require('jszip'); const xml = await (await JSZip.loadAsync(Buffer.concat(got))).file('word/document.xml').async('string');

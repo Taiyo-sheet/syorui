@@ -235,7 +235,8 @@ window.__TS_DOC_ENGINE_ONLY = true;
       values['版'] = 'v0（試し）'; values['書類名'] = name;
       download(files[0].fileKey).then(function (buf) { return E.fillTemplate(window.JSZip, buf, ext, values); }).then(function (out) {
         return E.extractText(window.JSZip, out.data, ext).then(function (text) {
-          var issues = E.checkText(text, values).filter(function (x) { return x.indexOf('【入力欄') < 0; });
+          var hasUnknown = !!(out.unknown && out.unknown.length);
+          var issues = E.checkText(text, values).filter(function (x) { return x.indexOf('【入力欄') < 0 && !(hasUnknown && x.indexOf('置き換えられていない項目が残っています') === 0); });   // 項目名の打ち間違いは、下の1件にまとめる
           if (out.unknown && out.unknown.length) issues.unshift('案件くんにない項目名（空になります）：' + out.unknown.map(function (n) { return /^\{\{/.test(n) ? n : '{{' + n + '}}'; }).join(' '));
           if (out.empty && out.empty.length) issues.push('案件くんの値が空の項目：' + out.empty.join('、'));
           result.textContent = '';
