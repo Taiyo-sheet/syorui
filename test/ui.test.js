@@ -735,6 +735,15 @@ test('画面：議事録に、音声の文字起こしを貼り付けると、�
     await open();
     assert.strictEqual(await page.getByRole('button', { name: 'AIで整理（未設定）' }).isDisabled(), true, '設定するまで、AIは押せない');
     await page.locator('[data-minutes-src]').fill('えー、出席者：太田、國井\n場所：現場事務所\n工程の確認について。\n夜間規制は9時から17時で決定しました。\n来週までに太田さんが見積書を送付します。\n次回は11月1日です。');
+    // Copilot：依頼文をコピー／Copilotを開く
+    await ctx.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: url });
+    await page.evaluate(() => { window.__opened = []; window.open = function (u) { window.__opened.push(u); return null; }; });
+    await page.getByRole('button', { name: '①依頼文をコピー' }).click();
+    await page.getByText(/コピーしました/).waitFor();
+    const clip = await page.evaluate(() => navigator.clipboard.readText());
+    assert.match(clip, /【出席者】[\s\S]*【決定事項】[\s\S]*【ToDo】[\s\S]*【文字起こし】/, 'Copilotに渡す依頼文が、コピーされる');
+    await page.getByRole('button', { name: '②Copilotを開く' }).click();
+    assert.deepStrictEqual(await page.evaluate(() => window.__opened), ['https://m365.cloud.microsoft/chat']);
     await page.getByRole('button', { name: 'かんたん整理（外部に送りません）' }).click();
     assert.strictEqual(await page.locator('[data-ask="出席者"]').inputValue(), '太田、國井');
     assert.strictEqual(await page.locator('[data-ask="場所"]').inputValue(), '現場事務所');

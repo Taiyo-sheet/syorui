@@ -665,7 +665,10 @@
         });
       }
       // 議事録などの入力欄（雛形に {{打合せ日}} {{議事録メモ}} などがあるときだけ出す）
-      var MINUTES_SERVER_URL = '';   // AIで議事録を整理するサーバーのURL（pdf-server の /minutes）。空のあいだは、「AIで整理」は押せない
+      // Microsoft Copilot に渡す依頼文（コピーして、Copilot のチャットに貼り、続けて、文字起こしを貼る）。結果は、見出し付きになるので、そのまま貼り付けて「かんたん整理」で、入力欄に入る
+  var COPILOT_PROMPT = '以下は、打合せの音声の文字起こしです。次の見出しで、箇条書きにまとめてください。分からない項目は、空にしてください。書かれていないことは、作らないでください。「えー」「あの」などは、取り除いてください。\n【出席者】\n【場所】\n【議題】\n【打合せ内容】\n【決定事項】\n【ToDo】（いつまでに・誰が・何を。1行に1つ）\n【次回予定】\n\n【文字起こし】\n';
+  var COPILOT_URL = 'https://m365.cloud.microsoft/chat';   // Microsoft 365 Copilot のチャット（会社の契約。開けなければ、ここを直す）
+  var MINUTES_SERVER_URL = '';   // AIで議事録を整理するサーバーのURL（pdf-server の /minutes）。空のあいだは、「AIで整理」は押せない
   function askValues(asks, name) {
         return new Promise(function (resolve) {
           var cover = el('div', 'position:fixed;left:0;top:0;right:0;bottom:0;background:rgba(0,0,0,.45);z-index:10001;overflow:auto');
@@ -680,6 +683,18 @@
             card.appendChild(el('div', 'font-size:12px;color:#666', '音声の文字起こしを、そのまま貼り付けて、下のボタンで、項目に分けられます（必ず、確認・修正してから、作成してください）'));
             var src = el('textarea', 'width:100%;height:110px;box-sizing:border-box;font-size:13px;padding:6px;margin-top:4px;background:#f7fafc'); src.setAttribute('data-minutes-src', '1');
             card.appendChild(src);
+            // Copilot を使う場合：①依頼文をコピー → ②Copilot を開く → 依頼文と、文字起こしを貼る → できた文章を、上の欄に貼る → 「かんたん整理」
+            var cop = el('div', 'margin:6px 0 2px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-size:12px');
+            cop.appendChild(el('span', 'color:#666', 'Copilotを使う場合：'));
+            var copy = el('button', 'padding:5px 9px;font-size:12px;cursor:pointer', '①依頼文をコピー'); copy.type = 'button';
+            copy.addEventListener('click', function () {
+              var done = function () { note.textContent = 'コピーしました。Copilotのチャットに貼り、続けて、文字起こしを貼ってください。できた文章を、上の欄に貼って、「かんたん整理」を押します。'; };
+              var fallback = function () { var t = document.createElement('textarea'); t.value = COPILOT_PROMPT; document.body.appendChild(t); t.select(); try { document.execCommand('copy'); done(); } catch (e) { note.textContent = 'コピーできませんでした。'; } document.body.removeChild(t); };
+              if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(COPILOT_PROMPT).then(done, fallback); else fallback();
+            });
+            var openCop = el('button', 'padding:5px 9px;font-size:12px;cursor:pointer', '②Copilotを開く'); openCop.type = 'button';
+            openCop.addEventListener('click', function () { window.open(COPILOT_URL, '_blank', 'noopener'); });
+            cop.appendChild(copy); cop.appendChild(openCop); card.appendChild(cop);
             var tools = el('div', 'margin:4px 0 8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center');
             var easy = el('button', 'padding:6px 10px;font-size:12px;cursor:pointer', 'かんたん整理（外部に送りません）'); easy.type = 'button';
             easy.addEventListener('click', function () { fillFrom(summarizeLocal(src.value)); note.textContent = '簡易に分けました。内容を、確認・修正してください。'; });
