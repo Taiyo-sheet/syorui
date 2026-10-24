@@ -69,6 +69,59 @@
     if (kind === 'pptx') return lines.join('</a:t></a:r><a:br/><a:r>' + (rpr || '') + '<a:t>');
     return lines.join('\n');
   }
+  // 議事録本文を、きちんとした議事録の形（見出しの帯、箇条書き、ToDoの表）の「段落のかたまり」にする（Word用）
+  //   ToDo の行が「期限｜担当｜内容」の形（｜で3つに区切る）なら、表にする。そうでなければ、箇条書きのまま
+  function parseMinutes(text) {
+    var sections = [], cur = null;
+    String(text || '').replace(/\r/g, '').split('\n').forEach(function (raw) {
+      var line = raw.replace(/\s+$/, '');
+      var h = line.trim().match(/^【([^】]+)】\s*(.*)$/);
+      if (h) { cur = { head: h[1], lines: [] }; sections.push(cur); if (h[2]) cur.lines.push(h[2]); return; }
+      if (!line.trim()) return;
+      if (!cur) { cur = { head: '', lines: [] }; sections.push(cur); }
+      cur.lines.push(line.trim());
+    });
+    return sections;
+  }
+  function wp(inner, ppr) { return '<w:p>' + (ppr ? '<w:pPr>' + ppr + '</w:pPr>' : '') + inner + '</w:p>'; }
+  function wr(text, rpr) { return '<w:r>' + (rpr ? '<w:rPr>' + rpr + '</w:rPr>' : '') + '<w:t xml:space="preserve">' + escXml(text) + '</w:t></w:r>'; }
+  function wcell(text, w, bold, fill) {
+    return '<w:tc><w:tcPr><w:tcW w:w="' + w + '" w:type="dxa"/>' + (fill ? '<w:shd w:val="clear" w:color="auto" w:fill="' + fill + '"/>' : '') + '</w:tcPr>' +
+      wp(wr(text, bold ? '<w:b/><w:sz w:val="20"/>' : '<w:sz w:val="20"/>'), '<w:spacing w:before="40" w:after="40"/>') + '</w:tc>';
+  }
+  function todoTable(rows) {
+    var W = [700, 5338, 1800, 1800], B = '<w:tblBorders>' + ['top', 'left', 'bottom', 'right', 'insideH', 'insideV'].map(function (e) { return '<w:' + e + ' w:val="single" w:sz="4" w:space="0" w:color="888888"/>'; }).join('') + '</w:tblBorders>';
+    var x = '<w:tbl><w:tblPr><w:tblW w:w="9638" w:type="dxa"/>' + B + '<w:tblLayout w:type="fixed"/></w:tblPr><w:tblGrid>' + W.map(function (w) { return '<w:gridCol w:w="' + w + '"/>'; }).join('') + '</w:tblGrid>';
+    x += '<w:tr><w:trPr><w:cantSplit/></w:trPr>' + wcell('No', W[0], true, 'E8EEF7') + wcell('内容', W[1], true, 'E8EEF7') + wcell('担当', W[2], true, 'E8EEF7') + wcell('期限', W[3], true, 'E8EEF7') + '</w:tr>';
+    rows.forEach(function (r, i) { x += '<w:tr><w:trPr><w:cantSplit/></w:trPr>' + wcell(String(i + 1), W[0]) + wcell(r[2], W[1]) + wcell(r[1], W[2]) + wcell(r[0], W[3]) + '</w:tr>'; });
+    return x + '</w:tbl>' + wp('', '<w:spacing w:after="60"/>');
+  }
+  function minutesParagraphs(text) {
+    var out = '';
+    parseMinutes(cleanValue(text)).forEach(function (sec) {
+      if (sec.head) out += wp(wr('■ ' + sec.head, '<w:b/><w:color w:val="FFFFFF"/><w:sz w:val="22"/>'), '<w:keepNext/><w:shd w:val="clear" w:color="auto" w:fill="1F3864"/><w:spacing w:before="200" w:after="80"/><w:ind w:left="80"/>');
+      var rows = [];
+      var todo = /^ToDo/i.test(sec.head);
+      sec.lines.forEach(function (l) {
+        var body = l.replace(/^[・\-*●•‣]\s*/, '');
+        var parts = body.split(/[｜|]/).map(function (x) { return x.trim(); });
+        if (todo && parts.length === 3 && parts[2]) { rows.push(parts); return; }
+        if (rows.length) { out += todoTable(rows); rows = []; }
+        out += wp(wr(l, '<w:sz w:val="21"/>'), '<w:spacing w:after="40"/><w:ind w:left="300" w:hanging="220"/>');
+      });
+      if (rows.length) out += todoTable(rows);
+      if (!sec.lines.length) out += wp(wr('なし', '<w:sz w:val="21"/>'), '<w:ind w:left="300"/>');
+    });
+    return out;
+  }
+  // 段落が、{{議事録本文}} だけなら、その段落ごと、上の形に入れ替える
+  function expandMinutes(xml, text) {
+    if (!String(text || '').trim()) return xml;
+    return xml.replace(/<w:p\b(?:(?!<\/w:p>)[\s\S])*<\/w:p>/g, function (p) {
+      return decodeLabel(p.replace(/<[^>]*>/g, '')) === '{{議事録本文}}' ? minutesParagraphs(text) : p;
+    });
+  }
+
   // 議事録本文：【見出し】だけの行を太字にし、ほかは、改行でつなぐ（Word用）
   function toXmlMinutes(v) {
     var lines = cleanValue(v).split(/\r?\n/);
@@ -125,6 +178,7 @@
       return Promise.all(names.map(function (n) {
         return zip.file(n).async('string').then(function (x) {
           if (n === 'xl/sharedStrings.xml') x = dropPhonetic(x);
+          if (ext === 'docx' && n === 'word/document.xml' && values['議事録本文']) x = expandMinutes(x, values['議事録本文']);   // 議事録本文は、きちんとした形に
           var y = replacePlaceholders(x, values, ext, unknown, empty);
           // 名前が違うものに加えて、{{ }} が段落やセルをまたいでいて置き換えられなかったものも拾う
           (y.replace(/<[^>]*>/g, '').match(/\{\{[^{}]*\}\}/g) || []).forEach(function (t) {
@@ -685,7 +739,7 @@
       }
       // 議事録などの入力欄（雛形に {{打合せ日}} {{議事録メモ}} などがあるときだけ出す）
       // Microsoft Copilot に渡す依頼文（コピーして、Copilot のチャットに貼り、続けて、文字起こしを貼る）。結果は、見出し付きになるので、そのまま貼り付けて「かんたん整理」で、入力欄に入る
-  var COPILOT_PROMPT = '以下は、打合せの音声の文字起こしです。次の見出しで、箇条書きにまとめてください。分からない項目は、空にしてください。書かれていないことは、作らないでください。「えー」「あの」などは、取り除いてください。\n【出席者】\n【場所】\n【議題】\n【打合せ内容】\n【決定事項】\n【ToDo】（いつまでに・誰が・何を。1行に1つ）\n【次回予定】\n\n【文字起こし】\n';
+  var COPILOT_PROMPT = '以下は、打合せの音声の文字起こしです。次の見出しで、箇条書きにまとめてください。分からない項目は、空にしてください。書かれていないことは、作らないでください。「えー」「あの」などは、取り除いてください。\n【出席者】\n【場所】\n【議題】\n【打合せ内容】\n【決定事項】\n【ToDo】（「期限｜担当｜内容」の形で、1行に1つ。例：10/25｜太田｜見積を出す）\n【次回予定】\n\n【文字起こし】\n';
   var COPILOT_URL = 'https://m365.cloud.microsoft/chat';   // Microsoft 365 Copilot のチャット（会社の契約。開けなければ、ここを直す）
   var MINUTES_SERVER_URL = '';   // AIで議事録を整理するサーバーのURL（pdf-server の /minutes）。空のあいだは、「AIで整理」は押せない
   function askValues(asks, name) {

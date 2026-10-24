@@ -186,16 +186,19 @@ test('formatMinutes：見出し付きの、ひとかたまりの文章にする�
   assert.strictEqual(t, '【出席者】\n不明\n\n【場所】\n現場事務所\n\n【議題】\n・工程\n\n【打合せ内容】\n・現調\n\n【決定事項】\n・11月着工\n\n【ToDo】\nなし\n\n【次回予定】\nなし');
 });
 
-test('{{議事録本文}}（Word）：【見出し】の行が太字になり、XMLが壊れず、本文の改行が保たれる', async () => {
+test('{{議事録本文}}（Word）：見出しは帯の段落、箇条書きは段落、ToDo（期限｜担当｜内容）は表になる。XMLが壊れない', async () => {
   const tpl = await build(); const z = await JSZip.loadAsync(tpl.docx);
-  z.file('word/document.xml', '<w:document xmlns:w="x"><w:body><w:p><w:r><w:rPr><w:sz w:val="22"/></w:rPr><w:t>{{議事録本文}}</w:t></w:r></w:p></w:body></w:document>');
+  z.file('word/document.xml', '<w:document xmlns:w="x"><w:body><w:p><w:r><w:t>上の文</w:t></w:r></w:p><w:p><w:pPr><w:jc w:val="left"/></w:pPr><w:r><w:t>{{議事録</w:t></w:r><w:r><w:t>本文}}</w:t></w:r></w:p><w:p><w:r><w:t>下の文</w:t></w:r></w:p></w:body></w:document>');
   const buf = await z.generateAsync({ type: 'nodebuffer' });
-  const out = await lib.fillTemplate(JSZip, buf, 'docx', { 議事録本文: '【決定事項】\n・着工は11月上旬 & 規制<9時>\n\n【議題】\n・工程' });
+  const body = '【決定事項】\n・規制は9時から17時\n\n【ToDo】\n・10/25｜太田｜見積を出す\n・10/27|國井|工程表を共有\n・メモだけの行\n\n【次回予定】';
+  const out = await lib.fillTemplate(JSZip, buf, 'docx', { 議事録本文: body });
   const xml = await (await JSZip.loadAsync(out.data)).file('word/document.xml').async('string');
-  assert.strictEqual((xml.match(/<w:r[ >]/g) || []).length, (xml.match(/<\/w:r>/g) || []).length, '<w:r> と </w:r> の数が合う');
-  assert.strictEqual((xml.match(/<w:t[ >]/g) || []).length, (xml.match(/<\/w:t>/g) || []).length, '<w:t> と </w:t> の数が合う');
-  assert.strictEqual((xml.match(/<w:b\/>/g) || []).length, 2, '見出し2つが太字');
-  const text = xml.replace(/<w:br\/>/g, '\n').replace(/<[^>]*>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
-  assert.strictEqual(text, '【決定事項】\n・着工は11月上旬 & 規制<9時>\n\n【議題】\n・工程', '本文が、そのまま入る（特殊文字もそのまま）');
-  assert.ok(!out.unknown.includes('議事録本文'), '議事録本文は、置き換わる');
+  const count = (re) => (xml.match(re) || []).length;
+  assert.strictEqual(count(/<w:p[ >]/g), count(/<\/w:p>/g), '<w:p> の数が合う'); assert.strictEqual(count(/<w:tbl>/g), 1, 'ToDoの表は1つ');
+  assert.strictEqual(count(/<w:tr>/g), 3, '見出し行＋2行（「期限｜担当｜内容」の形のものだけ）'); assert.strictEqual(count(/<w:r[ >]/g), count(/<\/w:r>/g));
+  assert.strictEqual(count(/w:fill="1F3864"/g), 3, '見出し3つが帯');
+  const flat = xml.replace(/<\/w:p>|<\/w:tc>/g, '\n').replace(/<[^>]*>/g, '');
+  assert.match(flat, /上の文/); assert.match(flat, /下の文/); assert.match(flat, /■ 決定事項/); assert.match(flat, /・規制は9時から17時/);
+  assert.match(flat, /見積を出す\s+太田\s+10\/25/, '表：内容・担当・期限'); assert.match(flat, /・メモだけの行/); assert.match(flat, /■ 次回予定\s+なし/, '中身が空の見出しは「なし」');
+  assert.ok(!out.unknown.includes('議事録本文'));
 });

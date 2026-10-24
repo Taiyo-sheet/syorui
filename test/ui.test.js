@@ -796,9 +796,9 @@ test('画面：議事録（{{議事録本文}}）は、ひとつの四角に、�
     const [dl] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: '作成して保存' }).last().click()]);
     const got = []; for await (const c of await dl.createReadStream()) got.push(c);
     const xml = await (await JSZip.loadAsync(Buffer.concat(got))).file('word/document.xml').async('string');
-    const text = xml.replace(/<w:br\/>/g, '\n').replace(/<[^>]*>/g, '');
+    const text = xml.replace(/<w:br\/>|<\/w:p>/g, '\n').replace(/<[^>]*>/g, '');
     assert.match(text, /日時：\d{4}年\d{1,2}月\d{1,2}日　作成者：くに/, '打合せ日と作成者は、自動で入る');
-    assert.match(text, /【議題】\n・夜間規制の時間（直した）/, '直した内容が、Wordに入る');
+    assert.match(text, /■ 議題\n・夜間規制の時間（直した）/, '直した内容が、Wordに入る（見出しの帯の下）');
     assert.ok((xml.match(/<w:b\/>/g) || []).length >= 6, '見出しが太字');
     assert.deepStrictEqual(errors, []);
   } finally { await browser.close(); await mock.close(); }
