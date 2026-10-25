@@ -243,12 +243,19 @@ window.__TS_DOC_ENGINE_ONLY = true;
           result.appendChild(el('div', 'font-weight:bold;color:' + (issues.length ? '#c0392b' : '#1f7a3d'), issues.length ? '点検の結果：気になるところが、' + issues.length + '件あります' : '点検の結果：問題は、見つかりませんでした'));
           issues.forEach(function (t) { result.appendChild(el('div', 'font-size:13px;margin:2px 0 0 8px', '・' + t)); });
           result.appendChild(el('div', 'font-size:12px;color:#666;margin-top:4px', '※「【入力欄：…】」は、書類作成のとき、画面で入力する項目の場所です。'));
-          var fname = '試し_' + title(record, l) + '_' + name + '.' + ext;
-          var dl = el('button', 'margin-top:8px;padding:6px 12px;cursor:pointer', '試しに作ったファイルを、開く（保存はされません）'); dl.type = 'button'; dl.setAttribute('data-try-download', '1');
-          dl.addEventListener('click', function () {
-            var a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([out.data])); a.download = fname; document.body.appendChild(a); a.click(); document.body.removeChild(a);
-          });
-          result.appendChild(dl);
+          // できあがりの中身を、文字で見せる（スマホのキントーンのアプリでは、Wordなどのファイルを開けないため）
+          var pv = el('pre', 'white-space:pre-wrap;word-break:break-all;max-height:260px;overflow:auto;background:#f7f7f7;border:1px solid #ddd;border-radius:4px;padding:8px;margin:8px 0 0;font-size:13px;line-height:1.5');
+          pv.setAttribute('data-try-preview', '1'); pv.textContent = String(text).length > 20000 ? String(text).slice(0, 20000) + '\n…（以下、省略）' : String(text);
+          result.appendChild(el('div', 'font-size:12px;color:#666;margin-top:8px', '試しに作った書類の中身（文字だけ。表や体裁は、ここには出ません）'));
+          result.appendChild(pv);
+          if (!isMobile) {   // PCでは、ファイルとして開ける（保存は、されない）
+            var fname = '試し_' + title(record, l) + '_' + name + '.' + ext;
+            var dl = el('button', 'margin-top:8px;padding:6px 12px;cursor:pointer', '試しに作ったファイルを、開く（保存はされません）'); dl.type = 'button'; dl.setAttribute('data-try-download', '1');
+            dl.addEventListener('click', function () {
+              var a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([out.data])); a.download = fname; document.body.appendChild(a); a.click(); document.body.removeChild(a);
+            });
+            result.appendChild(dl);
+          }
         });
       }).catch(function (e) { result.style.color = '#c0392b'; result.textContent = '試しに作れませんでした：' + ((e && e.message) || ''); });
     }

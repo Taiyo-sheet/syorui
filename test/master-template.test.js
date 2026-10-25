@@ -167,6 +167,7 @@ test('書類マスタ：試しに作る（見本の案件を選ぶ→記入済�
     const t = await page.locator('[data-try-panel]').textContent();
     assert.match(t, /案件くんにない項目名（空になります）：.*ないもの/, '雛形の打ち間違いを、指摘する');
     assert.doesNotMatch(t, /置き換えられていない項目が残っています/, '同じ指摘を、2回出さない');
+    assert.match(await page.locator('[data-try-preview]').textContent(), /第二多摩川橋 補修工事/, '中身が、文字でも見える');
     const [dl] = await Promise.all([page.waitForEvent('download'), page.locator('[data-try-download]').click()]);
     const got = []; for await (const c of await dl.createReadStream()) got.push(c);
     const JSZip = require('jszip'); const xml = await (await JSZip.loadAsync(Buffer.concat(got))).file('word/document.xml').async('string');
@@ -198,5 +199,24 @@ test('書類マスタ：スマホ（モバイル）でも、ボタンが出て�
     t = await setup(mock, url, browser, '/__page?nohost=1');
     await t.page.evaluate((r) => window.__fire('app.record.detail.show', { record: r }), mock.state.records['10'][0]);
     assert.strictEqual(await t.page.locator('[data-master-bar] [data-master-swap]').count(), 1, '帯の中に、ボタンが出る');
+  } finally { await browser.close(); await mock.close(); }
+});
+
+test('書類マスタ：スマホでは、試しに作った書類の中身を、文字で見せる（ファイルを開くボタンは、出さない）', { skip }, async () => {
+  const mock = createMock(); const url = await mock.listen();
+  const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
+  try {
+    mock.addApp('10', '書類マスタ'); addAnken(mock);
+    const k = mock.addFile(await docxWith('工事名称：{{工事名称}}'), '雛形.docx');
+    mock.addRecord('10', { 書類名: { value: 'い' }, 雛形: { value: [{ fileKey: k, name: '雛形.docx' }] } });
+    const { page, errors } = await setup(mock, url, browser, '/k/m/__page');
+    await page.evaluate((r) => window.__fire('mobile.app.record.detail.show', { record: r }), mock.state.records['10'][0]);
+    await page.locator('[data-master-try]').click();
+    await page.locator('[data-try-case]').first().click();
+    await page.getByText(/点検の結果：問題は/).waitFor();
+    const pv = await page.locator('[data-try-preview]').textContent();
+    assert.match(pv, /工事名称：第二多摩川橋 補修工事/);
+    assert.strictEqual(await page.locator('[data-try-download]').count(), 0, 'スマホでは、ファイルを開くボタンを出さない');
+    assert.deepStrictEqual(errors, []);
   } finally { await browser.close(); await mock.close(); }
 });
