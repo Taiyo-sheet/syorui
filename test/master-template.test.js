@@ -14,7 +14,7 @@ let chromium; try { chromium = require('playwright-core').chromium; } catch (e) 
 const skip = !chromium || !CHROMIUM ? 'Chromium が見つからないためスキップ' : false;
 
 const FAKE = `
-  function q(params) { var o = []; Object.keys(params || {}).forEach(function (k) { o.push(encodeURIComponent(k) + '=' + encodeURIComponent(params[k])); }); return o.join('&'); }
+  function q(params) { var o = []; Object.keys(params || {}).forEach(function (k) { var v = params[k]; if (Array.isArray(v)) v.forEach(function (x, i) { o.push(encodeURIComponent(k + '[' + i + ']') + '=' + encodeURIComponent(x)); }); else o.push(encodeURIComponent(k) + '=' + encodeURIComponent(v)); }); return o.join('&'); }
   function api(url, method, params) {
     var get = method === 'GET';
     return fetch(url + (get ? '?' + q(params) : ''), { method: method, headers: { 'X-Requested-With': 'XMLHttpRequest', 'Content-Type': 'application/json' }, body: get ? undefined : JSON.stringify(params) })
@@ -25,7 +25,7 @@ const FAKE = `
   window.kintone = {
     api: api, getRequestToken: function () { return 'tok'; },
     events: { on: function (n, fn) { [].concat(n).forEach(function (x) { h[x] = fn; }); } },
-    app: { getId: function () { return 10; }, getHeaderMenuSpaceElement: function () { return document.getElementById('hdr'); },
+    app: { getId: function () { return 10; }, getHeaderSpaceElement: function () { return document.getElementById('hdr'); }, getHeaderMenuSpaceElement: function () { return document.getElementById('hdr'); },
       record: { getHeaderMenuSpaceElement: function () { return document.getElementById('hdr'); } } },
     mobile: { app: { getId: function () { return 10; }, getHeaderSpaceElement: function () { return document.getElementById('hdr'); } } }
   };
@@ -217,6 +217,30 @@ test('書類マスタ：スマホでは、試しに作った書類の中身を�
     const pv = await page.locator('[data-try-preview]').textContent();
     assert.match(pv, /工事名称：第二多摩川橋 補修工事/);
     assert.strictEqual(await page.locator('[data-try-download]').count(), 0, 'スマホでは、ファイルを開くボタンを出さない');
+    assert.deepStrictEqual(errors, []);
+  } finally { await browser.close(); await mock.close(); }
+});
+
+test('書類マスタ：「雛形の状況」の一覧（雛形の有無・案件での作成数・最終作成日）と、全雛形の点検', { skip }, async () => {
+  const mock = createMock(); const url = await mock.listen();
+  const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
+  try {
+    mock.addApp('10', '書類マスタ'); addAnken(mock);
+    const row = (n, d) => ({ id: '1', value: { 書類保管_書類名: { value: n }, 書類保管_作成日: { value: d } } });
+    mock.state.records['575'][0]['書類保管'] = { type: 'SUBTABLE', value: [row('良い書類', '2026-10-01'), row('良い書類', '2026-10-20')] };
+    const good = mock.addFile(await docxWith('{{工事名称}}'), 'good.docx'), typo = mock.addFile(await docxWith('{{工事名称々}}'), 'typo.docx');
+    const mk = (n, st, f) => mock.addRecord('10', { 書類名: { value: n }, 工程: { value: st }, 表示順: { value: '1' }, 使用状況: { value: '使用中' }, 雛形: { value: f } });
+    mk('良い書類', '打合せ', [{ fileKey: good, name: 'good.docx' }]); mk('打ち間違いの書類', '打合せ', [{ fileKey: typo, name: 'typo.docx' }]); mk('雛形のない書類', '竣工', []);
+    const { page, errors } = await setup(mock, url, browser);
+    await page.evaluate(() => window.__fire('app.record.index.show', {}));
+    await page.locator('[data-master-dash] summary').click();
+    await page.getByText(/書類 3 件　雛形なし 1 件/).waitFor();
+    const t = await page.locator('[data-master-dash]').textContent();
+    assert.match(t, /良い書類.*good\.docx.*2.*2026-10-20/); assert.match(t, /雛形のない書類未登録/);
+    await page.locator('[data-master-check-all]').click();
+    await page.getByText(/2件を点検：注意 1 件/).waitFor();
+    const t2 = await page.locator('[data-master-dash]').textContent();
+    assert.match(t2, /良い書類.*OK/); assert.match(t2, /打ち間違いの書類.*注意：{{工事名称々}}/);
     assert.deepStrictEqual(errors, []);
   } finally { await browser.close(); await mock.close(); }
 });

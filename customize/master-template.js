@@ -262,6 +262,83 @@ window.__TS_DOC_ENGINE_ONLY = true;
     loadList();
   }
 
+  // ---- 一覧画面：「雛形の状況」（どの書類に雛形があるか・案件で何回作られたか・{{ }}の打ち間違いはないか） ----
+  function wideHost() {
+    try {
+      if (isMobile) return kintone.mobile.app.getHeaderSpaceElement && kintone.mobile.app.getHeaderSpaceElement();
+      return kintone.app.getHeaderSpaceElement && kintone.app.getHeaderSpaceElement();
+    } catch (e) { return null; }
+  }
+  // 案件くんの「書類保管」表から、書類名ごとの、作成数と、最終作成日を数える（読むだけ。最新の案件から、最大500件）
+  function usageCounts() {
+    return api('GET', '/k/v1/records', { app: ANKEN_APP, fields: ['書類保管'], query: 'order by $id desc limit 500' }).then(function (res) {
+      var u = {};
+      res.records.forEach(function (r) {
+        var rows = (r['書類保管'] && r['書類保管'].value) || [];
+        rows.forEach(function (row) {
+          var n = row.value['書類保管_書類名'] && row.value['書類保管_書類名'].value; if (!n) return;
+          var at = (row.value['書類保管_作成日'] && row.value['書類保管_作成日'].value) || '';
+          var o = u[n] || (u[n] = { count: 0, last: '' }); o.count++; if (at > o.last) o.last = at;
+        });
+      });
+      return { usage: u, cases: res.records.length };
+    }).catch(function () { return null; });
+  }
+  function dashboard(host) {
+    if (!host || host.querySelector('[data-master-dash]')) return;
+    var box = el('details', 'margin:8px 0;border:1px solid #cfd8e3;border-radius:6px;background:#fff;padding:6px 10px');
+    box.setAttribute('data-master-dash', '1');
+    var sum = el('summary', 'cursor:pointer;font-weight:bold;font-size:' + (isMobile ? '15px' : '13px'), '雛形の状況（タップで開く）'); box.appendChild(sum);
+    var body = el('div', 'margin-top:8px;font-size:12px'); box.appendChild(body); host.appendChild(box);
+    var loaded = false;
+    box.addEventListener('toggle', function () {
+      if (!box.open || loaded) return; loaded = true;
+      body.textContent = '読み込んでいます…';
+      Promise.all([
+        api('GET', '/k/v1/records', { app: appId(), query: 'order by 表示順 asc limit 500' }),
+        usageCounts()
+      ]).then(function (rs) {
+        var recs = rs[0].records, uc = rs[1];
+        body.textContent = '';
+        var none = recs.filter(function (r) { return !(r[FILE_FIELD].value || []).length && (!r['使用状況'] || r['使用状況'].value !== '廃止'); }).length;
+        body.appendChild(el('div', 'margin-bottom:6px', '書類 ' + recs.length + ' 件　雛形なし ' + none + ' 件' + (uc ? '　（作成数は、案件くんの最新' + uc.cases + '件から数えています）' : '　（案件くんを読めないため、作成数は出せません）')));
+        var wrap = el('div', 'overflow-x:auto'); var tb = el('table', 'border-collapse:collapse;width:100%;min-width:' + (isMobile ? '520px' : '640px'));
+        var head = el('tr'); ['工程', '書類名', '雛形', '作成数', '最終作成日', '点検'].forEach(function (h) { head.appendChild(el('th', 'text-align:left;border-bottom:2px solid #cfd8e3;padding:4px 6px;white-space:nowrap', h)); });
+        tb.appendChild(head);
+        var cells = [];
+        recs.forEach(function (r) {
+          var name = r[NAME_FIELD].value, files = r[FILE_FIELD].value || [], used = uc && uc.usage[name];
+          var tr = el('tr', (r['使用状況'] && r['使用状況'].value === '廃止') ? 'color:#999' : '');
+          var td = function (t, st) { var c = el('td', 'border-bottom:1px solid #eee;padding:4px 6px;' + (st || ''), t); tr.appendChild(c); return c; };
+          td(r['工程'] ? r['工程'].value : '');
+          td(name);
+          td(files.length ? files[0].name : '未登録', files.length ? '' : 'color:#c0392b;font-weight:bold');
+          td(uc ? String(used ? used.count : 0) : '—', 'text-align:right');
+          td(used && used.last ? used.last : '');
+          var chk = td(files.length ? '（未点検）' : '', 'white-space:nowrap'); cells.push({ rec: r, cell: chk, files: files, name: name });
+          tb.appendChild(tr);
+        });
+        wrap.appendChild(tb); body.appendChild(wrap);
+        var go = el('button', 'margin-top:8px;padding:' + (isMobile ? '10px 14px' : '5px 10px') + ';cursor:pointer', '雛形を、すべて点検する（{{ }}の打ち間違いを探す）'); go.type = 'button'; go.setAttribute('data-master-check-all', '1');
+        go.addEventListener('click', function () {
+          go.disabled = true; var bad = 0, n = 0;
+          cells.filter(function (c) { return c.files.length; }).reduce(function (p, c) {
+            return p.then(function () {
+              c.cell.textContent = '点検中…';
+              return download(c.files[0].fileKey).then(function (buf) { return placeholders(buf, extOf(c.files[0].name)); }).then(unknownNames).then(function (b) {
+                n++;
+                if (b === null) { c.cell.textContent = '（点検できません）'; c.cell.style.color = '#999'; }
+                else if (b.length) { bad++; c.cell.textContent = '注意：' + b.map(function (x) { return '{{' + x + '}}'; }).join(' '); c.cell.style.color = '#c0392b'; c.cell.style.whiteSpace = 'normal'; }
+                else { c.cell.textContent = 'OK'; c.cell.style.color = '#1f7a3d'; }
+              }, function () { c.cell.textContent = '（読めません）'; });
+            });
+          }, Promise.resolve()).then(function () { go.disabled = false; sumNote.textContent = n + '件を点検：注意 ' + bad + ' 件'; sumNote.style.color = bad ? '#c0392b' : '#1f7a3d'; });
+        });
+        var sumNote = el('span', 'margin-left:8px;font-weight:bold'); body.appendChild(go); body.appendChild(sumNote);
+      }).catch(function (e) { body.style.color = '#c0392b'; body.textContent = '読み込めませんでした：' + ((e && e.message) || ''); });
+    });
+  }
+
   // ---- 一覧画面：複数のファイルを、まとめて差し替える ----
   kintone.events.on(['app.record.index.show', 'mobile.app.record.index.show'], guard(function (event) {
     var host = hostFor('index');
@@ -303,6 +380,7 @@ window.__TS_DOC_ENGINE_ONLY = true;
       }).catch(function (e) { msg.style.color = '#c0392b'; msg.textContent = (e && e.message) || '差し替えに失敗しました'; });
     }));
     msg = note(host);
+    dashboard(wideHost() || host);
     return event;
   }));
 })();
