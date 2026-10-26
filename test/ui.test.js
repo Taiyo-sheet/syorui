@@ -803,3 +803,24 @@ test('画面：議事録（{{議事録本文}}）は、ひとつの四角に、�
     assert.deepStrictEqual(errors, []);
   } finally { await browser.close(); await mock.close(); }
 });
+
+test('画面：書類関係のタブに、保存した書類の一覧が出る（新しい順・版・作成日・承認状況）。表は動かさない', { skip }, async () => {
+  const mock = createMock(); const url = await mock.listen();
+  const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
+  try {
+    await seed(mock);
+    const r = (n, v, d, st) => ({ id: String(Math.random()), value: { 書類保管_書類名: { value: n }, 書類保管_版: { value: v }, 書類保管_作成日: { value: d }, 書類保管_承認状況: { value: st || '' }, 書類保管_ファイル: { value: [] } } });
+    const rec = Object.assign({}, RECORD, { 書類保管: { type: 'SUBTABLE', value: [r('古い書類', '1', '2026-10-01'), r('新しい書類', '2', '2026-10-20', '承認済み')] } });
+    const { page, errors } = await openPage(browser, url, '/__page', rec);
+    const box = page.locator('[data-doc-saved]'); await box.waitFor({ state: 'attached' });
+    const t = await box.textContent();
+    assert.match(t, /保存した書類（2件）/);
+    assert.ok(t.indexOf('新しい書類') < t.indexOf('古い書類'), '新しい順');
+    assert.match(t, /新しい書類　v2　2026-10-20　［承認済み］/);
+    assert.deepStrictEqual(errors, []);
+    // 書類がまだ無い案件
+    const p2 = await openPage(browser, url, '/__page', Object.assign({}, RECORD, { 書類保管: { type: 'SUBTABLE', value: [] } }));
+    await p2.page.locator('[data-doc-saved]').waitFor({ state: 'attached' });
+    assert.match(await p2.page.locator('[data-doc-saved]').textContent(), /まだ、保存した書類は、ありません/);
+  } finally { await browser.close(); await mock.close(); }
+});

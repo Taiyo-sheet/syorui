@@ -1107,9 +1107,45 @@
     return wrap;
   }
 
+  // 書類関係のタブの中に、保存した書類の一覧を見せる（書類保管の表は、フォームの一番下に、動かさずに置いてあるため）。
+  // 表は動かさず、画面に、読み取り用の一覧を出すだけ。PCでは、「開く」で、ダウンロードできる
+  function savedBox(record) {
+    var rows = rowsOf(record).map(function (r) {
+      var f = r.value[SUB.file] && r.value[SUB.file].value, pf = SUB.pdf && r.value[SUB.pdf] && r.value[SUB.pdf].value;
+      return { name: cellText(r, SUB.name), version: cellText(r, SUB.version), at: cellText(r, SUB.at), status: cellText(r, SUB.status), file: f && f[0], pdf: pf && pf[0] };
+    }).filter(function (x) { return x.name; }).sort(function (a, b) { return a.at < b.at ? 1 : a.at > b.at ? -1 : 0; });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-doc-saved]'), function (o) { if (o.parentNode) o.parentNode.removeChild(o); });
+    var box = el('details', 'margin:4px 0 8px;border:1px solid #cfd8e3;border-radius:6px;background:#fff;padding:6px 10px;max-width:760px');
+    box.setAttribute('data-doc-saved', '1');
+    box.appendChild(el('summary', 'cursor:pointer;font-weight:bold;font-size:14px', '保存した書類（' + rows.length + '件）'));
+    if (!rows.length) { box.appendChild(el('div', 'font-size:12px;color:#666;margin-top:6px', 'まだ、保存した書類は、ありません。「書類を作る」で作ると、ここに出ます。')); }
+    rows.slice(0, 30).forEach(function (x) {
+      var line = el('div', 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;border-top:1px solid #eee;padding:5px 0;font-size:13px');
+      line.appendChild(el('div', 'flex:1;min-width:180px', x.name + (x.version ? '　v' + x.version : '') + (x.at ? '　' + x.at : '') + (x.status ? '　［' + x.status + '］' : '')));
+      if (!isMobile) [[x.file, '開く'], [x.pdf, 'PDF']].forEach(function (p) {
+        if (!p[0]) return;
+        var b = el('button', 'padding:3px 10px;font-size:12px;cursor:pointer', p[1]); b.type = 'button';
+        b.addEventListener('click', function () { b.disabled = true; download(p[0].fileKey).then(function (d) { saveAs(d, p[0].name); b.disabled = false; }, function () { b.disabled = false; }); });
+        line.appendChild(b);
+      });
+      box.appendChild(line);
+    });
+    if (rows.length > 30) box.appendChild(el('div', 'font-size:12px;color:#666;margin-top:4px', '新しい30件を表示しています。すべては、「依頼管理履歴」のタブの下の、書類保管の表です。'));
+    if (isMobile && rows.length) box.appendChild(el('div', 'font-size:12px;color:#666;margin-top:4px', 'スマホでは、ファイルは、「依頼管理履歴」のタブの下の表から、開いてください。'));
+    // 書類を作るボタンの、すぐ下に置く。ボタンが出ている間（＝書類関係のタブ）だけ見せる
+    var tries = 0;
+    var timer = setInterval(function () {
+      var hub = document.querySelector('[data-doc-hub]');
+      if (!hub) { if (++tries > 50 && !document.body.contains(box)) clearInterval(timer); return; }
+      if (hub.nextSibling !== box && !(hub.parentNode && box.parentNode === hub.parentNode && hub.nextSibling === box)) hub.parentNode.insertBefore(box, hub.nextSibling);
+      box.style.display = hub.style.display === 'none' ? 'none' : 'block';
+    }, 500);
+  }
+
   function onShow(event) {
     if (typeof JSZip === 'undefined') { console.error('JSZipが読み込まれていません。JavaScriptの読み込み順を確認してください。'); return event; }
     var record = event.record, projectId = recApi.getId();
+    try { savedBox(record); } catch (e) { console.error(e); }   // 書類関係のタブに、保存した書類の一覧
     var anchor = null;
     try { anchor = recApi.getFieldElement(ANCHOR_FIELD); } catch (e) { anchor = null; }
     // 置き場所の順番：①タブの並びの、すぐ下（書類関係タブが選ばれている間だけ）→ ②目印の項目の、すぐ上 → ③右下の丸いボタン（いつでも）
