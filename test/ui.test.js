@@ -773,6 +773,47 @@ test('画面：議事録に、音声の文字起こしを貼り付けると、�
   } finally { await browser.close(); await mock.close(); }
 });
 
+test('画面：サーバーにAIの鍵が無いあいだは、サーバーのURLが入っていても、「AIで整理」は未設定のまま押せない／鍵があれば押せる', { skip }, async () => {
+  const mock = createMock(); const url = await mock.listen();
+  const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
+  try {
+    await seed(mock);
+    const tpl = await build();
+    const z = await JSZip.loadAsync(tpl.docx);
+    const P = (t) => '<w:p><w:r><w:t>' + t + '</w:t></w:r></w:p>';
+    z.file('word/document.xml', '<w:document xmlns:w="x"><w:body>' + P('出席者：{{出席者}}') + P('場所：{{場所}}') + P('議題：{{議題}}') + P('内容：{{議事録メモ}}') + P('決定：{{決定事項}}') + P('ToDo：{{ToDo}}') + P('次回：{{次回予定}}') + '</w:body></w:document>');
+    const k = mock.addFile(await z.generateAsync({ type: 'nodebuffer' }), 'gijiroku3.docx');
+    mock.addRecord('10', { 書類名: { value: '議事録' }, 工程: { value: '打合せ・見積・提案' }, 表示順: { value: '205' }, 説明: { value: '' }, 見られる立場: { value: ['営業'] }, 使用状況: { value: '使用中' }, 雛形: { value: [{ fileKey: k, name: 'gijiroku3.docx' }] } });
+    const ctx = await browser.newContext(); const page = await ctx.newPage();
+    const errors = []; page.on('pageerror', (e) => errors.push(e.message));
+    let withAI = false; const sent = [];
+    page.on('request', (r) => { if (/\/minutes$/.test(r.url()) && r.method() === 'POST') sent.push(r.url()); });
+    await page.route('**/__lib/doc-button.js', async (route) => {
+      let src = fs.readFileSync(require('path').join(__dirname, '..', 'customize', 'doc-button.js'), 'utf8');
+      src = src.replace(/var MINUTES_SERVER_URL = '[^']*';/, "var MINUTES_SERVER_URL = '" + (withAI ? url : '') + "';");
+      await route.fulfill({ status: 200, contentType: 'text/javascript; charset=utf-8', body: src });
+    });
+    page.on('dialog', (d) => d.accept());
+    await page.addInitScript(FAKE_KINTONE);
+    const open = async () => {
+      await page.goto(url + '/__page'); await page.evaluate((r) => window.__fire(r), RECORD);
+      await page.locator('[data-doc-hub]').click(); await page.getByText('工程別の書類：').waitFor();
+      await page.locator('select').nth(0).selectOption('打合せ・見積・提案');
+      await page.locator('div[style*="border-top"]', { hasText: '議事録' }).getByRole('button', { name: '作成して保存' }).click();
+      await page.locator('[data-minutes-src]').waitFor();
+    };
+    withAI = true; mock.state.aiReady = false;
+    await open();
+    await page.getByRole('button', { name: 'AIで整理（未設定）' }).waitFor();
+    assert.strictEqual(await page.getByRole('button', { name: 'AIで整理（未設定）' }).isDisabled(), true, '鍵が無ければ、押せない');
+    mock.state.aiReady = true;
+    await open();
+    await page.getByRole('button', { name: 'AIで整理（外部のAIに送ります）' }).waitFor();
+    assert.strictEqual(await page.getByRole('button', { name: 'AIで整理（外部のAIに送ります）' }).isDisabled(), false, '鍵があれば、押せる');
+    assert.deepStrictEqual(errors, []);
+  } finally { await browser.close(); await mock.close(); }
+});
+
 test('画面：議事録（{{議事録本文}}）は、ひとつの四角に、見出し付きでまとまる。貼り付け→「かんたん整理」→四角に入る→直して作成→Wordに入る', { skip }, async () => {
   const mock = createMock(); const url = await mock.listen();
   const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });

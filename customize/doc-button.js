@@ -786,7 +786,7 @@
       // Microsoft Copilot に渡す依頼文（コピーして、Copilot のチャットに貼り、続けて、文字起こしを貼る）。結果は、見出し付きになるので、そのまま貼り付けて「かんたん整理」で、入力欄に入る
   var COPILOT_PROMPT = '以下は、打合せの音声の文字起こしです。次の見出しで、箇条書きにまとめてください。分からない項目は、空にしてください。書かれていないことは、作らないでください。「えー」「あの」などは、取り除いてください。\n【出席者】\n【場所】\n【議題】\n【打合せ内容】\n【決定事項】\n【ToDo】（「期限｜担当｜内容」の形で、1行に1つ。例：10/25｜太田｜見積を出す）\n【次回予定】\n\n【文字起こし】\n';
   var COPILOT_URL = 'https://m365.cloud.microsoft/chat';   // Microsoft 365 Copilot のチャット（会社の契約。開けなければ、ここを直す）
-  var MINUTES_SERVER_URL = '';   // AIで議事録を整理するサーバーのURL（pdf-server の /minutes）。空のあいだは、「AIで整理」は押せない
+  var MINUTES_SERVER_URL = 'https://ts-pdf-server.onrender.com';   // AIで議事録を整理するサーバーのURL（pdf-server の /minutes）。空のとき、または、サーバーに鍵が入っていないあいだは、「AIで整理」は押せない
   function askValues(asks, name) {
         return new Promise(function (resolve) {
           var cover = el('div', 'position:fixed;left:0;top:0;right:0;bottom:0;background:rgba(0,0,0,.45);z-index:10001;overflow:auto');
@@ -819,7 +819,9 @@
             var tools = el('div', 'margin:4px 0 8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center');
             var easy = el('button', 'padding:6px 10px;font-size:12px;cursor:pointer', 'かんたん整理（外部に送りません）'); easy.type = 'button';
             easy.addEventListener('click', function () { fillFrom(summarizeLocal(src.value)); note.textContent = '簡易に分けました。内容を、確認・修正してください。'; });
-            var ai = el('button', 'padding:6px 10px;font-size:12px;cursor:pointer;font-weight:bold', MINUTES_SERVER_URL ? 'AIで整理（外部のAIに送ります）' : 'AIで整理（未設定）'); ai.type = 'button'; ai.disabled = !MINUTES_SERVER_URL;
+            var ai = el('button', 'padding:6px 10px;font-size:12px;cursor:pointer;font-weight:bold', MINUTES_SERVER_URL ? 'AIで整理（確認中…）' : 'AIで整理（未設定）'); ai.type = 'button'; ai.disabled = true;
+            // サーバーに、AIの鍵が入っているときだけ、押せるようにする（鍵が無い・サーバーに届かないときは、「未設定」のまま）
+            if (MINUTES_SERVER_URL) fetch(MINUTES_SERVER_URL.replace(/\/$/, '') + '/minutes/status').then(function (r) { return r.ok ? r.json() : { ready: false }; }).catch(function () { return { ready: false }; }).then(function (j) { if (j && j.ready) { ai.disabled = false; ai.textContent = 'AIで整理（外部のAIに送ります）'; } else { ai.textContent = 'AIで整理（未設定）'; } });
             var note = el('span', 'font-size:12px;color:#1f7a3d');
             var extra = el('input', 'width:100%;box-sizing:border-box;font-size:12px;padding:4px;margin-bottom:4px'); extra.type = 'text'; extra.placeholder = 'AIに送らず、伏せたい言葉（コンマ区切り。例：会社名、物件名）'; extra.setAttribute('data-mask-extra', '1');
             card.appendChild(el('div', 'font-size:14px;font-weight:bold;color:#1f3a6e;margin-top:8px', '② 下のボタンで、整理します（整理した結果は、③に入ります）'));

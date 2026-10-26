@@ -120,6 +120,11 @@ function createServer(opts) {
       if (!originOk) return send(403, 'forbidden');
       res.writeHead(204, Object.assign({ 'Access-Control-Allow-Methods': 'POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type, X-Api-Key', 'Access-Control-Max-Age': '600' }, cors)); return res.end();
     }
+    // 画面が、「AIで整理」を押せるかを知るための確認（鍵があるか、だけ。鍵の中身は、返さない）
+    if (req.method === 'GET' && u.pathname === '/minutes/status') {
+      if (!originOk && !keyOk) return send(403, 'forbidden');
+      res.writeHead(200, Object.assign({ 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }, cors)); return res.end(JSON.stringify({ ready: aiReady() }));
+    }
     if (req.method === 'POST' && u.pathname === '/minutes') {
       if (!originOk && !keyOk) return send(403, 'forbidden');
       if (!aiReady()) return send(503, 'AIの整理は、まだ設定されていません');

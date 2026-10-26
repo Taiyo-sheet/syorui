@@ -64,6 +64,14 @@ test('pdf-server /minutes：鍵が無ければ503／許可した画面だけ／A
       delete process.env.ANTHROPIC_API_KEY;
       let r = await fetch(base + '/minutes', { method: 'POST', headers: { Origin: ORIGIN, 'Content-Type': 'application/json' }, body: JSON.stringify({ text: 'あ' }) });
       assert.strictEqual(r.status, 503, '鍵がなければ、AIは動かない');
+      // 状況の確認：鍵が無ければ ready:false／許可していない画面は断る／鍵の中身は返さない
+      let st = await fetch(base + '/minutes/status', { headers: { Origin: ORIGIN } });
+      assert.strictEqual(st.status, 200); assert.deepStrictEqual(await st.json(), { ready: false });
+      assert.strictEqual((await fetch(base + '/minutes/status', { headers: { Origin: 'https://evil.example' } })).status, 403);
+      process.env.ANTHROPIC_API_KEY = 'sk-test-secret';
+      st = await fetch(base + '/minutes/status', { headers: { Origin: ORIGIN } }); const stText = await st.text();
+      assert.deepStrictEqual(JSON.parse(stText), { ready: true }); assert.ok(!stText.includes('sk-test-secret'), '鍵は返さない');
+      delete process.env.ANTHROPIC_API_KEY;
       process.env.ANTHROPIC_API_KEY = 'sk-test'; process.env.ANTHROPIC_BASE_URL = 'http://127.0.0.1:' + fake.address().port;
       r = await fetch(base + '/minutes', { method: 'POST', headers: { Origin: 'https://evil.example', 'Content-Type': 'application/json' }, body: JSON.stringify({ text: 'あ' }) });
       assert.strictEqual(r.status, 403);
