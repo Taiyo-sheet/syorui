@@ -37,7 +37,7 @@ const FAKE_KINTONE = `
     api: api,
     getRequestToken: function () { return 'tok'; },
     events: { on: function (names, fn) { handlers.push(fn); } },
-    app: { getId: function () { return 575; }, getFormFields: function () { return Promise.resolve(FIELDS); }, record: rec() },
+    app: { getId: function () { return 575; }, getFormFields: function () { return Promise.resolve(FIELDS); }, record: Object.assign(rec(), { setFieldShown: function (c, v) { window.__hidden = window.__hidden || {}; window.__hidden[c] = v; } }) },
     mobile: { app: { getId: function () { return 575; }, getHeaderSpaceElement: header, record: { getId: function () { return 1; } } } }
   };
   window.__fire = function (record) { handlers.forEach(function (h) { h({ record: record }); }); };
@@ -812,6 +812,7 @@ test('画面：書類関係のタブに、保存した書類の一覧が出る�
     const r = (n, v, d, st) => ({ id: String(Math.random()), value: { 書類保管_書類名: { value: n }, 書類保管_版: { value: v }, 書類保管_作成日: { value: d }, 書類保管_承認状況: { value: st || '' }, 書類保管_ファイル: { value: [] } } });
     const rec = Object.assign({}, RECORD, { 書類保管: { type: 'SUBTABLE', value: [r('古い書類', '1', '2026-10-01'), r('新しい書類', '2', '2026-10-20', '承認済み')] } });
     const { page, errors } = await openPage(browser, url, '/__page', rec);
+    assert.strictEqual(await page.evaluate(() => (window.__hidden || {})['書類保管']), false, '詳細画面では、書類保管の表を隠す');
     const box = page.locator('[data-doc-saved]'); await box.waitFor({ state: 'attached' });
     const t = await box.textContent();
     assert.match(t, /保存した書類（2件）/);

@@ -1109,6 +1109,7 @@
 
   // 書類関係のタブの中に、保存した書類の一覧を見せる（書類保管の表は、フォームの一番下に、動かさずに置いてあるため）。
   // 表は動かさず、画面に、読み取り用の一覧を出すだけ。PCでは、「開く」で、ダウンロードできる
+  var HIDE_TABLE_ON_DETAIL = true;   // 詳細画面で、書類保管の表を隠す（false にすると、表が、また出る）
   function savedBox(record) {
     var rows = rowsOf(record).map(function (r) {
       var f = r.value[SUB.file] && r.value[SUB.file].value, pf = SUB.pdf && r.value[SUB.pdf] && r.value[SUB.pdf].value;
@@ -1146,6 +1147,9 @@
     if (typeof JSZip === 'undefined') { console.error('JSZipが読み込まれていません。JavaScriptの読み込み順を確認してください。'); return event; }
     var record = event.record, projectId = recApi.getId();
     try { savedBox(record); } catch (e) { console.error(e); }   // 書類関係のタブに、保存した書類の一覧
+    // 書類保管の表は、フォームの一番下（どのタブにも属さない行）にあり、タブ表示プラグインが、どれかのタブに出してしまう。
+    // 詳細画面では、表を隠す（保存した書類は、書類関係のタブの一覧で見える。「編集」の画面では、表が出る）。フォームの行は、動かさない
+    if (HIDE_TABLE_ON_DETAIL) { try { recApi.setFieldShown(SUB.table, false); } catch (e) { console.error(e); } }
     var anchor = null;
     try { anchor = recApi.getFieldElement(ANCHOR_FIELD); } catch (e) { anchor = null; }
     // 置き場所の順番：①タブの並びの、すぐ下（書類関係タブが選ばれている間だけ）→ ②目印の項目の、すぐ上 → ③右下の丸いボタン（いつでも）
