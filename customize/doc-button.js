@@ -268,11 +268,30 @@
       var m;
       if ((m = l.match(/^(?:出席者|参加者)[:：]\s*(.+)$/))) { out['出席者'] = m[1].trim(); return; }
       if ((m = l.match(/^(?:場所|会場)[:：]\s*(.+)$/))) { out['場所'] = m[1].trim(); return; }
+      // ふつうに話した言い回し（「〇〇で、△△さんと□□で行いました」「10月25日までに太田さんが…します」など）
+      if ((m = l.match(/(?:打合せ|打ち合わせ|会議|ミーティング)は、?(.+?)で、?(.+?)で(?:行い|開き|実施|おこない)/))) {
+        if (!out['場所']) out['場所'] = m[1].trim();
+        if (!out['出席者']) out['出席者'] = m[2].split(/[、,，と]/).map(function (x) { x = x.trim(); var w = x.match(/^(.+?)の(.+)$/); if (w) x = w[2] + '（' + w[1] + '）'; return x.replace(/(さん|様|氏)(?=（|$)/, ''); }).filter(Boolean).join('、');
+        return;
+      }
+      if ((m = l.match(/^(\d{1,2})月(\d{1,2})日(?:まで(?:に)?)、?(.+?)(?:さん|様)?が、?(.+?)。?$/))) {
+        var what = m[4].replace(/出します$/, '出す').replace(/もらいます$/, 'もらう').replace(/します$/, 'する').replace(/ます$/, '');
+        out['ToDo'].push(m[1] + '/' + m[2] + '｜' + m[3].trim() + '｜' + what); return;
+      }
+      if ((m = l.match(/^(?:決まったこと|決まったの|決定事項|決定)(?:は|として|[:：])、?\s*(.+)$/))) {
+        m[1].replace(/。$/, '').replace(/です$/, '').split('、').forEach(function (x) { x = x.trim(); if (x) out['決定事項'].push(x); }); return;
+      }
+      if ((m = l.match(/^次回(?:の打合せ|予定)?(?:は|：|:)?、?\s*(.+)$/)) && !out['次回予定']) { out['次回予定'] = m[1].replace(/です。?$/, '').replace(/。$/, ''); return; }
+      if ((m = l.match(/^(?:まず|次に|それから|続いて|最後に)、?(.+?)(?:ですが|については|について|なんですが)、?/))) {
+        out['議題'].push(m[1].trim());
+        var rest = l.slice(m[0].length).replace(/。$/, '').trim(); if (rest.length > 1) out['議事録メモ'].push(rest);
+        return;
+      }
       if (/次回/.test(l) && !out['次回予定']) { out['次回予定'] = l; return; }
       if (/(決定|決まり|決めまし|確定|で行く|で進め|で合意|ということで|とします|することにな)/.test(l)) { out['決定事項'].push(l); return; }
       if (/(まで(に)?|お願い|対応|送付|提出|手配|連絡|確認し|調整|共有)/.test(l) && /(\d{1,2}[\/月]\d{1,2}|来週|今週|明日|明後日|今月|来月|月末|至急|早め)/.test(l)) { out['ToDo'].push(l); return; }
       if (/(について|の件|議題|テーマ)/.test(l) && l.length <= 40) { out['議題'].push(l); return; }
-      out['議事録メモ'].push(l);
+      out['議事録メモ'].push(l.replace(/。$/, ''));
     });
     ['議題', '議事録メモ', '決定事項', 'ToDo'].forEach(function (k) { out[k] = out[k].join('\n'); });
     return out;
