@@ -12,6 +12,7 @@
     "add-approval-fields": "node scripts/add-approval-fields.js",
     "template": "node scripts/template-tool.js",
     "apply-customize": "node scripts/apply-customize.js",
+    "check-tabs": "node scripts/check-tabs.js",
     "make-test-templates": "node scripts/make-test-templates.js",
     "e2e": "node scripts/e2e-check.js"
   },
