@@ -740,10 +740,10 @@ test('画面：議事録に、音声の文字起こしを貼り付けると、�
     // Copilot：依頼文をコピー／Copilotを開く
     await ctx.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: url });
     await page.evaluate(() => { window.__opened = []; window.open = function (u) { window.__opened.push(u); return null; }; });
-    await page.getByRole('button', { name: '①依頼文をコピー' }).click();
+    await page.getByRole('button', { name: '①依頼文＋文字起こしをコピー' }).click();
     await page.getByText(/コピーしました/).waitFor();
     const clip = await page.evaluate(() => navigator.clipboard.readText());
-    assert.match(clip, /【出席者】[\s\S]*【決定事項】[\s\S]*【ToDo】[\s\S]*【文字起こし】/, 'Copilotに渡す依頼文が、コピーされる');
+    assert.match(clip, /【出席者】[\s\S]*【決定事項】[\s\S]*【ToDo】[\s\S]*【文字起こし】[\s\S]*出席者：太田、國井/, 'Copilotに渡す依頼文と、文字起こしが、いっしょにコピーされる');
     await page.getByRole('button', { name: '②Copilotを開く' }).click();
     assert.deepStrictEqual(await page.evaluate(() => window.__opened), ['https://m365.cloud.microsoft/chat']);
     await page.getByRole('button', { name: 'かんたん整理（外部に送りません）' }).click();

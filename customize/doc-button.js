@@ -807,11 +807,15 @@
             // Copilot を使う場合：①依頼文をコピー → ②Copilot を開く → 依頼文と、文字起こしを貼る → できた文章を、上の欄に貼る → 「かんたん整理」
             var cop = el('div', 'margin:6px 0 2px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-size:12px');
             cop.appendChild(el('span', 'color:#666', 'Copilotを使う場合：'));
-            var copy = el('button', 'padding:5px 9px;font-size:12px;cursor:pointer', '①依頼文をコピー'); copy.type = 'button';
+            var copy = el('button', 'padding:' + (isMobile ? '10px 12px' : '5px 9px') + ';font-size:' + (isMobile ? '14px' : '12px') + ';cursor:pointer', '①依頼文＋文字起こしをコピー'); copy.type = 'button';
             copy.addEventListener('click', function () {
-              var done = function () { note.textContent = 'コピーしました。Copilotのチャットに貼り、続けて、文字起こしを貼ってください。できた文章を、上の欄に貼って、「かんたん整理」を押します。'; };
-              var fallback = function () { var t = document.createElement('textarea'); t.value = COPILOT_PROMPT; document.body.appendChild(t); t.select(); try { document.execCommand('copy'); done(); } catch (e) { note.textContent = 'コピーできませんでした。'; } document.body.removeChild(t); };
-              if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(COPILOT_PROMPT).then(done, fallback); else fallback();
+              // 依頼文のあとに、①の文字起こしを、続けて入れてコピーする（Copilotに、1回、貼るだけで、済む）
+              if (!src.value.trim()) { note.style.color = '#c0392b'; note.textContent = '先に、①の枠に、文字起こしを貼ってください'; return; }
+              note.style.color = '#1f7a3d';
+              var text = COPILOT_PROMPT + src.value.trim();
+              var done = function () { note.textContent = 'コピーしました。「②Copilotを開く」で、Copilotのチャットに貼り付けて、送ります。できた文章を、コピーして、' + (single ? '下の③の枠に、貼り付けてください（「かんたん整理」は、押さなくて大丈夫です）。' : '上の①の枠に、貼って、「かんたん整理」を押します。'); };
+              var fallback = function () { var t = document.createElement('textarea'); t.value = text; document.body.appendChild(t); t.select(); try { document.execCommand('copy'); done(); } catch (e) { note.textContent = 'コピーできませんでした。'; } document.body.removeChild(t); };
+              if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, fallback); else fallback();
             });
             var openCop = el('button', 'padding:5px 9px;font-size:12px;cursor:pointer', '②Copilotを開く'); openCop.type = 'button';
             openCop.addEventListener('click', function () { window.open(COPILOT_URL, '_blank', 'noopener'); });
