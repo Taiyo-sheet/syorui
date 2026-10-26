@@ -244,3 +244,50 @@ test('書類マスタ：「雛形の状況」の一覧（雛形の有無・案�
     assert.deepStrictEqual(errors, []);
   } finally { await browser.close(); await mock.close(); }
 });
+
+test('書類マスタ：{{ }}の候補（案件くんの項目名＋自動で入る言葉・見本の値・絞り込み・コピー）', { skip }, async () => {
+  const mock = createMock(); const url = await mock.listen();
+  const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
+  try {
+    mock.addApp('10', '書類マスタ'); addAnken(mock);
+    mock.addRecord('10', { 書類名: { value: 'あ' }, 雛形: { value: [] } });
+    const { page, errors } = await setup(mock, url, browser);
+    await page.evaluate((r) => window.__fire('app.record.detail.show', { record: r }), mock.state.records['10'][0]);
+    await page.locator('[data-master-cand]').click();
+    await page.locator('[data-cand-item]').first().waitFor();
+    const all = await page.locator('[data-cand-item]').evaluateAll((e) => e.map((x) => x.getAttribute('data-cand-item')));
+    assert.ok(all.includes('工事名称') && all.includes('工事場所'), '案件くんの項目が出る');
+    assert.ok(all.includes('作成日') && all.includes('議事録本文'), '自動で入る言葉も出る');
+    assert.match(await page.locator('[data-cand-item="工事名称"]').textContent(), /見本：第二多摩川橋 補修工事/);
+    await page.locator('[data-cand-search]').fill('場所');
+    assert.ok((await page.locator('[data-cand-item]').evaluateAll((e) => e.map((x) => x.getAttribute('data-cand-item')))).every((n) => n.includes('場所')), '絞り込める');
+    await page.locator('[data-cand-item="工事場所"]').click();
+    await page.waitForFunction(() => /{{工事場所}}/.test(document.querySelector('[data-cand-note]').textContent));
+    assert.deepStrictEqual(errors, []);
+  } finally { await browser.close(); await mock.close(); }
+});
+
+test('書類マスタ：雛形の履歴と、前の版に戻す（選んだ版が先頭・いまの先頭は旧版で残る）', { skip }, async () => {
+  const mock = createMock(); const url = await mock.listen();
+  const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
+  try {
+    mock.addApp('10', '書類マスタ');
+    const f = (t, n) => ({ fileKey: mock.addFile(Buffer.from(t), n), name: n });
+    const id = mock.addRecord('10', { 書類名: { value: 'う' }, 雛形: { value: [f('NEW', '新.docx'), f('OLD1', '旧版_20261001_前.docx'), f('OLD0', '旧版_20260901_最初.docx')] } });
+    const { page, errors } = await setup(mock, url, browser);
+    await page.evaluate((r) => window.__fire('app.record.detail.show', { record: r }), mock.state.records['10'][0]);
+    await page.locator('[data-master-hist]').click();
+    await page.locator('[data-hist-restore="1"]').waitFor();
+    const t = await page.locator('body').textContent();
+    assert.match(t, /【いま使われている】 新\.docx/); assert.match(t, /前\.docx（2026\/10\/01 に、旧版になりました）/);
+    await page.locator('[data-hist-restore="1"]').click();
+    await page.getByText(/戻しました/).waitFor();
+    const n = names(mock, id);
+    assert.strictEqual(n[0], '前.docx', '選んだ版が先頭（旧版の印は外れる）');
+    assert.match(n[1], /^旧版_\d{8}_新\.docx$/, 'いまの先頭は、旧版で残る');
+    assert.strictEqual(n[2], '旧版_20260901_最初.docx');
+    const first = mock.state.records['10'][0]['雛形'].value[0];
+    assert.strictEqual(mock.state.files[first.fileKey].buf.toString(), 'OLD1', '中身も、その版');
+    assert.deepStrictEqual(errors, []);
+  } finally { await browser.close(); await mock.close(); }
+});

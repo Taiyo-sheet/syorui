@@ -177,6 +177,8 @@ window.__TS_DOC_ENGINE_ONLY = true;
       }).catch(function (e) { msg.style.color = '#c0392b'; msg.textContent = (e && e.message) || '差し替えに失敗しました（元の雛形は、そのままです）'; });
     }));
     host.appendChild(button('試しに作る', 'data-master-try', function () { tryPanel(rec, name, msg); }));
+    host.appendChild(button('履歴・前の版に戻す', 'data-master-hist', function () { histPanel(rec, name, msg); }));
+    host.appendChild(button('{{ }}の候補', 'data-master-cand', function () { candPanel(); }));
     msg = note(host);
     return event;
   }));
@@ -260,6 +262,105 @@ window.__TS_DOC_ENGINE_ONLY = true;
       }).catch(function (e) { result.style.color = '#c0392b'; result.textContent = '試しに作れませんでした：' + ((e && e.message) || ''); });
     }
     loadList();
+  }
+
+  // ---- 共通：画面いっぱいの、小さな窓 ----
+  function modal(titleText, noteText) {
+    var cover = el('div', 'position:fixed;left:0;top:0;right:0;bottom:0;background:rgba(0,0,0,.45);z-index:10001;overflow:auto');
+    var card = el('div', 'background:#fff;max-width:640px;margin:24px auto;border-radius:8px;padding:16px;font-size:14px;box-sizing:border-box;width:calc(100% - 24px)');
+    card.appendChild(el('div', 'font-weight:bold;font-size:16px;margin-bottom:6px', titleText));
+    if (noteText) card.appendChild(el('div', 'font-size:12px;color:#666;margin-bottom:8px', noteText));
+    var body = el('div'); card.appendChild(body);
+    var bar = el('div', 'margin-top:10px;display:flex;justify-content:flex-end'); var close = el('button', 'padding:' + (isMobile ? '10px 16px' : '6px 12px') + ';cursor:pointer', '閉じる'); close.type = 'button'; bar.appendChild(close); card.appendChild(bar);
+    close.addEventListener('click', function () { document.body.removeChild(cover); });
+    cover.appendChild(card); document.body.appendChild(cover);
+    return { cover: cover, card: card, body: body };
+  }
+  function copyText(t) {
+    return new Promise(function (resolve) {
+      var fallback = function () { var x = document.createElement('textarea'); x.value = t; x.style.cssText = 'position:fixed;left:0;top:0;opacity:0'; document.body.appendChild(x); x.select(); var ok = false; try { ok = document.execCommand('copy'); } catch (e) { ok = false; } document.body.removeChild(x); resolve(ok); };
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(t).then(function () { resolve(true); }, fallback); else fallback();
+    });
+  }
+
+  // ---- 雛形に書く {{ }} の候補：案件くんの項目名の一覧（タップでコピー）と、見本の値 ----
+  var AUTO_HELP = { '書類名': 'この書類の名前', '版': 'v1, v2…（作るたびに増える）', '作成日': '作った日', '打合せ日': '議事録：打合せの日（画面で入力）', '作成者': '議事録：作った人（自動）', '議事録本文': '議事録：見出し付きの本文（画面で入力）', '出席者': '議事録：画面で入力', '場所': '議事録：画面で入力', '議題': '議事録：画面で入力', '議事録メモ': '議事録：画面で入力', '決定事項': '議事録：画面で入力', 'ToDo': '議事録：画面で入力', '次回予定': '議事録：画面で入力' };
+  var SKIP_TYPES = { LABEL: 1, SPACER: 1, HR: 1, SUBTABLE: 1, FILE: 1, GROUP: 1, REFERENCE_TABLE: 1, RECORD_NUMBER: 0, CATEGORY: 1, STATUS: 1, STATUS_ASSIGNEE: 1, CREATOR: 0, MODIFIER: 0 };
+  function candPanel() {
+    var m = modal('雛形に書く {{ }} の候補', '雛形の中の、案件の値を入れたい場所に、下の「{{ }}」を、そのまま書きます。項目をタップすると、コピーされます。見本の値は、案件くんの、いちばん新しい案件のものです。');
+    var search = el('input', 'width:100%;box-sizing:border-box;font-size:14px;padding:6px;margin-bottom:6px'); search.type = 'text'; search.placeholder = '項目名で、絞り込む'; search.setAttribute('data-cand-search', '1');
+    var note = el('div', 'font-size:12px;color:#1f7a3d;min-height:16px;margin-bottom:4px'); note.setAttribute('data-cand-note', '1');
+    var list = el('div', 'max-height:' + (isMobile ? '55vh' : '380px') + ';overflow:auto;border:1px solid #ddd');
+    m.body.appendChild(search); m.body.appendChild(note); m.body.appendChild(list); list.textContent = '読み込んでいます…';
+    var items = [];
+    var E = window.TSDocEngine;
+    Promise.all([
+      api('GET', '/k/v1/app/form/fields', { app: ANKEN_APP }),
+      api('GET', '/k/v1/records', { app: ANKEN_APP, query: 'order by $id desc limit 1' }).catch(function () { return { records: [] }; })
+    ]).then(function (rs) {
+      var props = rs[0].properties || {}, rec = (rs[1].records || [])[0] || null, lm = { map: {}, props: {} };
+      Object.keys(props).forEach(function (c) { var pr = props[c]; lm.props[c] = pr; if (pr.label) lm.map[String(pr.label).trim()] = c; });
+      var vals = rec && E ? E.buildValues(rec, lm) : {};
+      Object.keys(props).forEach(function (c) {
+        var pr = props[c]; if (!pr.label || SKIP_TYPES[pr.type]) return;
+        items.push({ name: String(pr.label).trim(), sample: vals[String(pr.label).trim()] || '', kind: '案件くんの項目' });
+      });
+      Object.keys(AUTO_HELP).forEach(function (k) { items.push({ name: k, sample: AUTO_HELP[k], kind: '自動で入る言葉' }); });
+      render('');
+    }).catch(function (e) { list.textContent = '案件くんの項目を読み込めませんでした：' + ((e && e.message) || ''); });
+    function render(word) {
+      list.textContent = '';
+      var shown = items.filter(function (x) { return !word || x.name.indexOf(word) >= 0; });
+      if (!shown.length) { list.textContent = '該当する項目が、ありません'; return; }
+      var last = '';
+      shown.forEach(function (x) {
+        if (x.kind !== last) { last = x.kind; list.appendChild(el('div', 'background:#eef3f9;padding:4px 8px;font-size:12px;font-weight:bold', x.kind)); }
+        var row = el('div', 'padding:6px 8px;border-bottom:1px solid #eee;cursor:pointer'); row.setAttribute('data-cand-item', x.name);
+        row.appendChild(el('div', 'font-family:monospace;font-size:14px', '{{' + x.name + '}}'));
+        if (x.sample) row.appendChild(el('div', 'font-size:12px;color:#666;overflow:hidden;text-overflow:ellipsis;white-space:nowrap', (x.kind === '案件くんの項目' ? '見本：' : '') + x.sample));
+        row.addEventListener('click', function () { var t = '{{' + x.name + '}}'; copyText(t).then(function (ok) { note.style.color = ok ? '#1f7a3d' : '#c0392b'; note.textContent = ok ? 'コピーしました：' + t : 'コピーできませんでした。上の文字を、選んで、コピーしてください：' + t; }); });
+        list.appendChild(row);
+      });
+    }
+    search.addEventListener('input', function () { render(search.value.trim()); });
+  }
+
+  // ---- 雛形の履歴と、前の版に戻す（旧版の日付は、ファイル名の「旧版_日付_」から読む） ----
+  function histPanel(rec, name, msg) {
+    var files = (rec[FILE_FIELD] && rec[FILE_FIELD].value) || [];
+    var m = modal('「' + name + '」の雛形の履歴', '先頭が、いま使われている雛形です。「この版に戻す」を押すと、その版が先頭になり、いまの雛形は、旧版として残ります（消えません）。');
+    if (!files.length) { m.body.textContent = 'この書類には、雛形が、ありません'; return; }
+    files.forEach(function (f, i) {
+      var d = (f.name.match(/^旧版_(\d{4})(\d{2})(\d{2})_/) || []);
+      var row = el('div', 'padding:8px;border-bottom:1px solid #eee;display:flex;gap:8px;align-items:center;flex-wrap:wrap');
+      row.appendChild(el('div', 'flex:1;min-width:200px', (i === 0 ? '【いま使われている】 ' : '') + f.name.replace(/^旧版_\d{8}_/, '') + (d.length ? '（' + d[1] + '/' + d[2] + '/' + d[3] + ' に、旧版になりました）' : '')));
+      if (i > 0) {
+        var b = el('button', 'padding:' + (isMobile ? '10px 14px' : '5px 10px') + ';cursor:pointer', 'この版に戻す'); b.type = 'button'; b.setAttribute('data-hist-restore', String(i));
+        b.addEventListener('click', function () {
+          if (!confirm('「' + f.name.replace(/^旧版_\d{8}_/, '') + '」を、いまの雛形に戻します。\nいまの雛形「' + files[0].name + '」は、旧版として残ります。\n\nよろしいですか？')) return;
+          b.disabled = true; b.textContent = '戻しています…';
+          restore(rec, i).then(function () { m.body.textContent = '戻しました。画面を読み込み直します'; setTimeout(function () { location.reload(); }, 800); },
+            function (e) { b.disabled = false; b.textContent = 'この版に戻す'; m.body.insertBefore(el('div', 'color:#c0392b;margin-bottom:6px', (e && e.message) || '戻せませんでした（雛形は、そのままです）'), m.body.firstChild); });
+        });
+        row.appendChild(b);
+      }
+      m.body.appendChild(row);
+    });
+  }
+  // 戻す：選んだ版を先頭に、いまの先頭を旧版にして、すべて上げ直す（保存済みのファイルは、新しく上げたファイルより先に並ぶため）
+  function restore(rec, index) {
+    var files = ((rec[FILE_FIELD] && rec[FILE_FIELD].value) || []).slice();
+    var chosen = files[index], head = files[0];
+    var order = [{ f: chosen, name: chosen.name.replace(/^旧版_\d{8}_/, '') }, { f: head, name: /^旧版_/.test(head.name) ? head.name : '旧版_' + stamp() + '_' + head.name }];
+    files.forEach(function (f, i) { if (i !== 0 && i !== index) order.push({ f: f, name: f.name }); });
+    var keys = [];
+    return order.reduce(function (p, o) {
+      return p.then(function () { return download(o.f.fileKey).then(function (d) { return upload(d, o.name); }).then(function (k) { keys.push({ fileKey: k }); }); });
+    }, Promise.resolve()).then(function () {
+      var body = { app: appId(), id: rec.$id.value, record: {} }; body.record[FILE_FIELD] = { value: keys.slice(0, KEEP + 1) };
+      if (rec.$revision) body.revision = rec.$revision.value;
+      return api('PUT', '/k/v1/record', body);
+    });
   }
 
   // ---- 一覧画面：「雛形の状況」（どの書類に雛形があるか・案件で何回作られたか・{{ }}の打ち間違いはないか） ----
@@ -380,6 +481,7 @@ window.__TS_DOC_ENGINE_ONLY = true;
       }).catch(function (e) { msg.style.color = '#c0392b'; msg.textContent = (e && e.message) || '差し替えに失敗しました'; });
     }));
     msg = note(host);
+    host.appendChild(button('{{ }}の候補', 'data-master-cand', function () { candPanel(); }));
     dashboard(wideHost() || host);
     return event;
   }));
