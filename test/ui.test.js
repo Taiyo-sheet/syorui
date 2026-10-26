@@ -180,8 +180,10 @@ test('画面（モバイル）：ボタンが出て、作成して保存でき�
     await page.getByText('工程別の書類：').waitFor();
     await page.locator('select').nth(0).selectOption('打合せ・見積・提案');
     await page.getByRole('button', { name: '作成して保存' }).click();
-    await page.getByText(/ダウンロードしました/).waitFor();
+    await page.locator('[data-doc-text]').waitFor();   // スマホでは、ファイルを開けないため、中身を文字で出す
+    assert.match(await page.locator('[data-doc-text]').textContent(), /東京Aビル 改修工事/);
     assert.strictEqual(stored(mock).length, 1);
+    await page.locator('[data-doc-text]').locator('xpath=..').getByRole('button', { name: '閉じる' }).click();   // 閉じると、画面が更新される
     assert.deepStrictEqual(errors, []);
   } finally { await browser.close(); await mock.close(); }
 });
