@@ -171,7 +171,7 @@ test('書類マスタ：試しに作る（見本の案件を選ぶ→記入済�
     const [dl] = await Promise.all([page.waitForEvent('download'), page.locator('[data-try-download]').click()]);
     const got = []; for await (const c of await dl.createReadStream()) got.push(c);
     const JSZip = require('jszip'); const xml = await (await JSZip.loadAsync(Buffer.concat(got))).file('word/document.xml').async('string');
-    assert.match(xml, /第二多摩川橋 補修工事/); assert.match(xml, /東京都調布市/); assert.match(xml, /v0（試し）/); assert.match(xml, /【入力欄：決定事項】/);
+    assert.match(xml, /第二多摩川橋 補修工事/); assert.match(xml, /東京都調布市/); assert.match(xml, /v0（試し）/); assert.match(xml, /規制は9時から17時とする/, '議事録の項目は、見本の文章が入る');
     assert.strictEqual(JSON.stringify(mock.state.records), before, '案件くんにも書類マスタにも、何も書き込まない');
     assert.deepStrictEqual(errors, []);
   } finally { await browser.close(); await mock.close(); }
@@ -288,6 +288,24 @@ test('書類マスタ：雛形の履歴と、前の版に戻す（選んだ版�
     assert.strictEqual(n[2], '旧版_20260901_最初.docx');
     const first = mock.state.records['10'][0]['雛形'].value[0];
     assert.strictEqual(mock.state.files[first.fileKey].buf.toString(), 'OLD1', '中身も、その版');
+    assert.deepStrictEqual(errors, []);
+  } finally { await browser.close(); await mock.close(); }
+});
+
+test('書類マスタ：試しに作る（議事録の{{議事録本文}}には、見本の本文が入り、見出しが付く）', { skip }, async () => {
+  const mock = createMock(); const url = await mock.listen();
+  const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
+  try {
+    mock.addApp('10', '書類マスタ'); addAnken(mock);
+    const k = mock.addFile(await docxWith('{{議事録本文}}'), 'gijiroku.docx');
+    mock.addRecord('10', { 書類名: { value: '議事録' }, 雛形: { value: [{ fileKey: k, name: 'gijiroku.docx' }] } });
+    const { page, errors } = await setup(mock, url, browser, '/k/m/__page');
+    await page.evaluate((r) => window.__fire('mobile.app.record.detail.show', { record: r }), mock.state.records['10'][0]);
+    await page.locator('[data-master-try]').click();
+    await page.locator('[data-try-case]').first().click();
+    await page.getByText(/点検の結果/).waitFor();
+    const pv = await page.locator('[data-try-preview]').textContent();
+    assert.match(pv, /出席者/); assert.match(pv, /見積書を提出/); assert.doesNotMatch(pv, /【入力欄/);
     assert.deepStrictEqual(errors, []);
   } finally { await browser.close(); await mock.close(); }
 });

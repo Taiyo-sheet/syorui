@@ -149,9 +149,13 @@ window.__TS_DOC_ENGINE_ONLY = true;
   }
   function guard(fn) { return function (event) { try { return fn(event) || event; } catch (e) { console.error('[master-template]', e); return event; } }; }
 
-  function button(text, attr, onClick) {
-    var b = el('button', isMobile ? 'margin:4px 8px 4px 0;padding:10px 14px;font-size:15px;cursor:pointer' : 'margin:0 8px 0 0;padding:6px 12px;font-size:13px;cursor:pointer', text);
+  // キントーン標準のボタン（kintoneplugin-button-normal）に近い見た目。primary は、青
+  function button(text, attr, onClick, primary) {
+    var base = 'display:inline-block;box-sizing:border-box;margin:' + (isMobile ? '4px 8px 4px 0' : '0 8px 0 0') + ';padding:0 ' + (isMobile ? '16px' : '18px') + ';height:' + (isMobile ? '44px' : '40px') + ';line-height:' + (isMobile ? '42px' : '38px') + ';font-size:' + (isMobile ? '15px' : '14px') + ';border-radius:3px;cursor:pointer;vertical-align:middle;font-family:inherit;white-space:nowrap;';
+    var look = primary ? 'border:1px solid #2980b9;background:#3498db;color:#fff;box-shadow:1px 1px 1px rgba(255,255,255,.4) inset;' : 'border:1px solid #e3e7e8;background:#f7f9fa;color:#3498db;box-shadow:1px 1px 1px #fff inset;';
+    var b = el('button', base + look, text);
     b.type = 'button'; b.setAttribute(attr, '1'); b.addEventListener('click', onClick);
+    b.addEventListener('mouseover', function () { b.style.opacity = '.85'; }); b.addEventListener('mouseout', function () { b.style.opacity = '1'; });
     return b;
   }
   function note(host) { var n = el('span', 'font-size:12px;margin-left:4px;color:#1f7a3d'); n.setAttribute('data-master-note', '1'); host.appendChild(n); return n; }
@@ -175,7 +179,7 @@ window.__TS_DOC_ENGINE_ONLY = true;
           return swap(rec, f).then(function () { msg.textContent = '差し替えました。画面を読み込み直します'; setTimeout(function () { location.reload(); }, 800); });
         });
       }).catch(function (e) { msg.style.color = '#c0392b'; msg.textContent = (e && e.message) || '差し替えに失敗しました（元の雛形は、そのままです）'; });
-    }));
+    }, true));
     host.appendChild(button('試しに作る', 'data-master-try', function () { tryPanel(rec, name, msg); }));
     host.appendChild(button('履歴・前の版に戻す', 'data-master-hist', function () { histPanel(rec, name, msg); }));
     host.appendChild(button('{{ }}の候補', 'data-master-cand', function () { candPanel(); }));
@@ -193,7 +197,7 @@ window.__TS_DOC_ENGINE_ONLY = true;
     cover.setAttribute('data-try-panel', '1');
     var card = el('div', 'background:#fff;max-width:620px;margin:24px auto;border-radius:8px;padding:16px;font-size:14px;box-sizing:border-box;width:calc(100% - 24px)');
     card.appendChild(el('div', 'font-weight:bold;font-size:16px;margin-bottom:6px', '「' + name + '」を、試しに作る'));
-    card.appendChild(el('div', 'font-size:12px;color:#666;margin-bottom:8px', '見本にする案件を選んでください。いまの雛形（' + files[0].name + '）で、書類を作って、点検します。案件くんにも、ここにも、保存しません（案件くんは、読むだけです）。'));
+    card.appendChild(el('div', 'font-size:12px;color:#666;margin-bottom:8px', '見本にする案件を選んでください（工事名・場所などを入れるために使います）。議事録の本文など、画面で入力する項目は、見本の文章が入ります。いまの雛形（' + files[0].name + '）で、書類を作って、点検します。案件くんにも、ここにも、保存しません（案件くんは、読むだけです）。'));
     var search = el('input', 'width:100%;box-sizing:border-box;font-size:14px;padding:6px;margin-bottom:6px'); search.type = 'text'; search.placeholder = '案件名の一部で、絞り込む（空なら、新しい順）'; search.setAttribute('data-try-search', '1');
     var list = el('div', 'max-height:220px;overflow:auto;border:1px solid #ddd;margin-bottom:8px');
     var result = el('div', 'margin-top:8px');
@@ -233,7 +237,11 @@ window.__TS_DOC_ENGINE_ONLY = true;
       result.textContent = '作っています…'; result.style.color = '#333';
       var ext = extOf(files[0].name);
       var values = E.buildValues(record, l);
-      E.ASK.forEach(function (a) { values[a.key] = '【入力欄：' + a.key + '】'; });   // 書類作成のとき、画面で入力する項目は、目印の言葉を入れて、位置が分かるようにする
+      // 書類作成のとき、画面で入力する項目（議事録の本文など）は、見本の文章を入れて、できあがりの見た目を確認できるようにする。見本がない項目は、目印の言葉
+      var d = new Date(), login = ''; try { login = (kintone.getLoginUser() || {}).name || ''; } catch (e) { login = ''; }
+      var sample = { 打合せ日: d.getFullYear() + '年' + (d.getMonth() + 1) + '月' + d.getDate() + '日', 作成者: login || '（作成者）', 出席者: '太田（TAIYOSHEET）、國井、藤原（元請）', 場所: '現場事務所', 議題: '・夜間規制の時間について\n・資材の搬入日の調整', 議事録メモ: '・規制時間は、9時から17時で調整する方向\n・資材は金曜午前に搬入したい（元請の了承待ち）', 決定事項: '・規制は9時から17時とする\n・資材の搬入は、金曜午前', ToDo: '・10/25｜太田｜見積書を提出\n・10/27｜國井｜工程表を共有', 次回予定: '11月1日（金）　現場事務所' };
+      E.ASK.forEach(function (a) { values[a.key] = sample[a.key] || '【入力欄：' + a.key + '】'; });
+      if (E.formatMinutes) values['議事録本文'] = E.formatMinutes(sample);
       values['版'] = 'v0（試し）'; values['書類名'] = name;
       download(files[0].fileKey).then(function (buf) { return E.fillTemplate(window.JSZip, buf, ext, values); }).then(function (out) {
         return E.extractText(window.JSZip, out.data, ext).then(function (text) {
@@ -479,7 +487,7 @@ window.__TS_DOC_ENGINE_ONLY = true;
           });
         });
       }).catch(function (e) { msg.style.color = '#c0392b'; msg.textContent = (e && e.message) || '差し替えに失敗しました'; });
-    }));
+    }, true));
     msg = note(host);
     host.appendChild(button('{{ }}の候補', 'data-master-cand', function () { candPanel(); }));
     dashboard(wideHost() || host);
