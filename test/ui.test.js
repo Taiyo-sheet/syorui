@@ -867,3 +867,27 @@ test('画面：書類関係のタブに、保存した書類の一覧が出る�
     assert.match(await p2.page.locator('[data-doc-saved]').textContent(), /まだ、保存した書類は、ありません/);
   } finally { await browser.close(); await mock.close(); }
 });
+
+test('画面：作る前に、雛形に入れる案件くんの項目が空なら、知らせる（キャンセルで作らない／OKで作る）', { skip }, async () => {
+  const mock = createMock(); const url = await mock.listen();
+  const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
+  try {
+    await seed(mock);
+    const rec = Object.assign({}, RECORD, { c_addr: { type: 'SINGLE_LINE_TEXT', value: '' } });   // 現場住所が空
+    const { page, errors } = await openPage(browser, url, '/__page', rec);
+    page.removeAllListeners('dialog');
+    const msgs = []; let answer = false;
+    page.on('dialog', (d) => { msgs.push(d.message()); answer ? d.accept() : d.dismiss(); });
+    await page.locator('[data-doc-hub]').click(); await page.getByText('工程別の書類：').waitFor();
+    await page.locator('select').nth(0).selectOption('打合せ・見積・提案');
+    await page.getByRole('button', { name: '作成して保存' }).click();
+    await page.waitForFunction(() => true); await page.waitForTimeout(500);
+    assert.match(msgs[0], /案件くんで、次の項目が、空です：\n現場住所/);
+    assert.strictEqual(stored(mock).length, 0, 'キャンセルなら、作らない');
+    answer = true;
+    await page.getByRole('button', { name: '作成して保存' }).click();
+    await page.getByText(/ダウンロードしました/).waitFor();
+    assert.strictEqual(stored(mock).length, 1, 'OKなら、作る');
+    assert.deepStrictEqual(errors, []);
+  } finally { await browser.close(); await mock.close(); }
+});

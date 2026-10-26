@@ -409,7 +409,7 @@
   // Node（テスト）から使うときは、ここまでの部品だけを渡して終わる
   if (typeof kintone === 'undefined') {
     if (typeof module !== 'undefined' && module.exports) {
-      module.exports = { formatMinutes: formatMinutes, maskForAI: maskForAI, summarizeLocal: summarizeLocal, checkText: checkText, extractText: extractText, tidyMemo: tidyMemo, fieldText: fieldText, replacePlaceholders: replacePlaceholders, fillTemplate: fillTemplate, hasPlaceholders: hasPlaceholders, guessTarget: guessTarget, buildFilename: buildFilename, buildValues: buildValues, quote: quote, SUB: SUB, MF: MF, today: today };
+      module.exports = { emptyFieldsOf: emptyFieldsOf, formatMinutes: formatMinutes, maskForAI: maskForAI, summarizeLocal: summarizeLocal, checkText: checkText, extractText: extractText, tidyMemo: tidyMemo, fieldText: fieldText, replacePlaceholders: replacePlaceholders, fillTemplate: fillTemplate, hasPlaceholders: hasPlaceholders, guessTarget: guessTarget, buildFilename: buildFilename, buildValues: buildValues, quote: quote, SUB: SUB, MF: MF, today: today };
     }
     return;
   }
@@ -520,6 +520,15 @@
       .then(function (list) { phs[tpl.fileKey] = list; kinds[tpl.fileKey] = list.length ? 'merge' : 'plain'; delete pending[tpl.fileKey]; return kinds[tpl.fileKey]; },
         function () { delete pending[tpl.fileKey]; return 'merge'; });   // 調べられないときは、従来どおり「作成して保存」にする
     return pending[tpl.fileKey];
+  }
+  // 雛形の {{ }} のうち、案件くんの項目で、値が空のもの（画面で入力する項目・自動で入る言葉は、数えない）
+  function emptyFieldsOf(rec, values) {
+    var t = templateOf(rec), l = (t && phs[t.fileKey]) || [], seen = {}, out = [];
+    l.forEach(function (n) {
+      if (seen[n] || ASK.some(function (a) { return a.key === n; }) || !Object.prototype.hasOwnProperty.call(values, n)) return;
+      seen[n] = 1; if (String(values[n] == null ? '' : values[n]).trim() === '') out.push(n);
+    });
+    return out;
   }
   function asksOf(rec) { var t = templateOf(rec); var l = (t && phs[t.fileKey]) || []; return ASK.filter(function (a) { return l.indexOf(a.key) >= 0; }); }
   function kindOf(rec) { var t = templateOf(rec); return t ? kinds[t.fileKey] : undefined; }
@@ -930,6 +939,9 @@
           }
           var cur = existing[name];
           if (cur && !confirm('「' + name + '」は v' + cur.version + ' まで作成済みです。v' + (cur.version + 1) + ' を作成しますか？')) return;
+          // 作る前に、雛形に入れる案件くんの項目のうち、空のものを知らせる（空のまま作ると、その場所が空欄の書類になるため）
+          var emptyNow = emptyFieldsOf(rec, ctx.values);
+          if (emptyNow.length && !confirm('案件くんで、次の項目が、空です：\n' + emptyNow.join('、') + '\n\nこのままだと、書類の、その場所が、空欄になります。このまま作成しますか？\n（「キャンセル」で、案件くんに入力してから、作れます）')) return;
           var asks = asksOf(rec);
           (asks.length ? askValues(asks, name) : Promise.resolve({})).then(function (extra) {
             if (!extra) return;
