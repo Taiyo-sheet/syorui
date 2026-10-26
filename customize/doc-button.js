@@ -268,6 +268,11 @@
       var m;
       if ((m = l.match(/^(?:出席者|参加者)[:：]\s*(.+)$/))) { out['出席者'] = m[1].trim(); return; }
       if ((m = l.match(/^(?:場所|会場)[:：]\s*(.+)$/))) { out['場所'] = m[1].trim(); return; }
+      // 話すときに、見出しの言葉を言った場合（「出席者は、太田さんと國井さんです」「決まったことは、…」「宿題は、…」など）
+      if ((m = l.match(/^(出席者|参加者|メンバー)(?:は|：|:)、?\s*(.+)$/))) { out['出席者'] = m[2].replace(/(?:です|でした)。?$/, '').replace(/。$/, '').replace(/(さん|様|氏)/g, '').split(/[、,，]|と/).map(function (x) { x = x.trim(); var w = x.match(/^(.+?)の(.+)$/); if (w) x = w[2] + '（' + w[1] + '）'; return x; }).filter(Boolean).join('、'); return; }
+      if ((m = l.match(/^(?:場所|会場)(?:は|：|:)、?\s*(.+?)(?:です|でした)?。?$/)) && !out['場所']) { out['場所'] = m[1].trim(); return; }
+      if ((m = l.match(/^(?:議題|テーマ|話題)(?:は|：|:)、?\s*(.+)$/))) { m[1].replace(/(?:です|でした)。?$/, '').replace(/。$/, '').split(/、/).forEach(function (x) { x = x.trim(); if (x) out['議題'].push(x); }); return; }
+      if ((m = l.match(/^(?:宿題|やること|アクション(?:アイテム)?|ToDo|TODO|タスク)(?:は|：|:)、?\s*(.+)$/))) { m[1].replace(/。$/, '').split(/、/).forEach(function (x) { x = x.trim(); if (x) out['ToDo'].push(x); }); return; }
       // ふつうに話した言い回し（「〇〇で、△△さんと□□で行いました」「10月25日までに太田さんが…します」など）
       if ((m = l.match(/(?:打合せ|打ち合わせ|会議|ミーティング)は、?(.+?)で、?(.+?)で(?:行い|開き|実施|おこない)/))) {
         if (!out['場所']) out['場所'] = m[1].trim();
@@ -807,19 +812,22 @@
             // Copilot を使う場合：①依頼文をコピー → ②Copilot を開く → 依頼文と、文字起こしを貼る → できた文章を、上の欄に貼る → 「かんたん整理」
             var cop = el('div', 'margin:6px 0 2px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-size:12px');
             cop.appendChild(el('span', 'color:#666', 'Copilotを使う場合：'));
-            var copy = el('button', 'padding:' + (isMobile ? '10px 12px' : '5px 9px') + ';font-size:' + (isMobile ? '14px' : '12px') + ';cursor:pointer', '①依頼文＋文字起こしをコピー'); copy.type = 'button';
+            // 1つのボタンで、依頼文と文字起こしを、コピーして、Copilotを開く（貼り付けて、送るだけにする）
+            var copy = el('button', 'padding:' + (isMobile ? '10px 12px' : '5px 9px') + ';font-size:' + (isMobile ? '14px' : '12px') + ';cursor:pointer;font-weight:bold', 'Copilotで整理（コピーして開く）'); copy.type = 'button';
             copy.addEventListener('click', function () {
-              // 依頼文のあとに、①の文字起こしを、続けて入れてコピーする（Copilotに、1回、貼るだけで、済む）
               if (!src.value.trim()) { note.style.color = '#c0392b'; note.textContent = '先に、①の枠に、文字起こしを貼ってください'; return; }
               note.style.color = '#1f7a3d';
               var text = COPILOT_PROMPT + src.value.trim();
-              var done = function () { note.textContent = 'コピーしました。「②Copilotを開く」で、Copilotのチャットに貼り付けて、送ります。できた文章を、コピーして、' + (single ? '下の③の枠に、貼り付けてください（「かんたん整理」は、押さなくて大丈夫です）。' : '上の①の枠に、貼って、「かんたん整理」を押します。'); };
-              var fallback = function () { var t = document.createElement('textarea'); t.value = text; document.body.appendChild(t); t.select(); try { document.execCommand('copy'); done(); } catch (e) { note.textContent = 'コピーできませんでした。'; } document.body.removeChild(t); };
-              if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, fallback); else fallback();
+              var next = '【次】Copilotのチャットに、貼り付けて、送ってください。できた文章を、コピーして、この画面に戻り、' + (single ? '下の③の枠に、貼り付けます（「かんたん整理」は、押さなくて大丈夫です）。' : '上の①の枠に、貼って、「かんたん整理」を押します。');
+              // 同期で、コピー→開く（スマホで、開くのを止められないように、押した直後に、行う）
+              var ok = false;
+              var t = document.createElement('textarea'); t.value = text; t.style.cssText = 'position:fixed;left:0;top:0;opacity:0'; document.body.appendChild(t); t.select();
+              try { ok = document.execCommand('copy'); } catch (e) { ok = false; } document.body.removeChild(t);
+              if (ok) { note.textContent = 'コピーしました。' + next; window.open(COPILOT_URL, '_blank', 'noopener'); return; }
+              if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(function () { note.textContent = 'コピーしました。' + next; window.open(COPILOT_URL, '_blank', 'noopener'); }, function () { note.style.color = '#c0392b'; note.textContent = 'コピーできませんでした。'; });
+              else { note.style.color = '#c0392b'; note.textContent = 'コピーできませんでした。'; }
             });
-            var openCop = el('button', 'padding:5px 9px;font-size:12px;cursor:pointer', '②Copilotを開く'); openCop.type = 'button';
-            openCop.addEventListener('click', function () { window.open(COPILOT_URL, '_blank', 'noopener'); });
-            cop.appendChild(copy); cop.appendChild(openCop); card.appendChild(cop);
+            cop.appendChild(copy); card.appendChild(cop);
             var tools = el('div', 'margin:4px 0 8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center');
             var easy = el('button', 'padding:6px 10px;font-size:12px;cursor:pointer', 'かんたん整理（外部に送りません）'); easy.type = 'button';
             easy.addEventListener('click', function () { fillFrom(summarizeLocal(src.value)); note.textContent = '簡易に分けました。内容を、確認・修正してください。'; });
