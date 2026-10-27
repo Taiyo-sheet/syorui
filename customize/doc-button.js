@@ -297,6 +297,19 @@
       if ((m = l.match(/^(?:場所|会場)(?:は|：|:)、?\s*(.+?)(?:です|でした)?。?$/)) && !out['場所']) { out['場所'] = m[1].trim(); return; }
       if ((m = l.match(/^(?:議題|テーマ|話題)(?:は|：|:)、?\s*(.+)$/))) { m[1].replace(/(?:です|でした)。?$/, '').replace(/。$/, '').split(/、/).forEach(function (x) { x = x.trim(); if (x) out['議題'].push(x); }); return; }
       if ((m = l.match(/^(?:宿題|やること|アクション(?:アイテム)?|ToDo|TODO|タスク)(?:は|：|:)、?\s*(.+)$/))) { m[1].replace(/。$/, '').split(/、/).forEach(function (x) { x = x.trim(); if (x) out['ToDo'].push(x); }); return; }
+      // 出席・場所の言い回し：「今日は現場事務所で、A、B、元請のCが出席して…」「本日はオンラインで、AさんとBさんが参加しました」
+      if ((m = l.match(/^(?:今日は|本日は|今回は)?(?:(.+?)で、)?(.+?)(?:が|は)?(?:出席|参加)(?:して|しました|でした|です|者)/)) && /[、とと]|さん|様|氏/.test(m[2])) {
+        if (m[1] && !out['場所']) out['場所'] = m[1].trim();
+        if (!out['出席者']) out['出席者'] = m[2].replace(/(さん|様|氏)/g, '').split(/[、,，と]/).map(function (x) { x = x.trim(); var w = x.match(/^(.+?)の(.+)$/); if (w) x = w[2] + '（' + w[1] + '）'; return x; }).filter(Boolean).join('、');
+        return;
+      }
+      if (!out['場所'] && (m = l.match(/^(?:今日は|本日は|今回は)?(現場事務所|現場|オンライン|Teams|ＴＥＡＭＳ|Zoom|事務所|会議室|先方[^、。]{0,6}|[^、。]{1,10}(?:支店|営業所|本社|工場))(?:で|にて)(?:行いました|開きました|実施しました|打合せ)/))) { out['場所'] = m[1]; return; }
+      // 議題の言い回し：「〇〇について（確認・相談・検討・話し合い）しました」
+      if ((m = l.match(/^(.{2,30}?)(?:について|の件(?:について)?)(?:は)?、?(?:確認|相談|検討|話し合い|協議|共有|説明|打合せ|打ち合わせ)(?:を行い)?(?:しました|ました|した)/))) { out['議題'].push(m[1].trim()); return; }
+      // 担当の言い回し（期限なし）：「藤原さんは、〇〇をお願いします」「鈴木さんには、〇〇をお願いします」
+      if ((m = l.match(/^([一-龥々ァ-ヶー]{2,5})(?:さん|様)(?:は|には|に|から)、?(.+?)(?:を)?(?:お願いします|お願いしました|お願いしたい|してもらいます|していただきます|担当します|担当してもらいます)/))) { out['ToDo'].push('｜' + m[1] + '｜' + m[2].replace(/を$/, '')); return; }
+      // 決定の言い回し：「〜ことになりました」「〜ということで合意しました」「〜で決まりました」「〜にします」
+      if (/(ことになりました|ことにしました|ということで(?:合意|了解|決定|確定)|で(?:合意|了解)しました|に(?:決まり|決定)しました|にします。?$|とします。?$)/.test(l) && !/(お願い|してください)/.test(l)) { out['決定事項'].push(l.replace(/。$/, '')); return; }
       // ふつうに話した言い回し（「〇〇で、△△さんと□□で行いました」「10月25日までに太田さんが…します」など）
       if ((m = l.match(/(?:打合せ|打ち合わせ|会議|ミーティング)は、?(.+?)で、?(.+?)で(?:行い|開き|実施|おこない)/))) {
         if (!out['場所']) out['場所'] = m[1].trim();
@@ -319,7 +332,7 @@
       if (/次回/.test(l) && !out['次回予定']) { out['次回予定'] = l; return; }
       if (/(決定|決まり|決めまし|確定|で行く|で進め|で合意|ということで|とします|することにな)/.test(l)) { out['決定事項'].push(l); return; }
       if (/(まで(に)?|お願い|対応|送付|提出|手配|連絡|確認し|調整|共有)/.test(l) && /(\d{1,2}[\/月]\d{1,2}|来週|今週|明日|明後日|今月|来月|月末|至急|早め)/.test(l)) { out['ToDo'].push(l); return; }
-      if (/(について|の件|議題|テーマ)/.test(l) && l.length <= 40) { out['議題'].push(l); return; }
+      if (/(について|の件|議題|テーマ)/.test(l) && l.length <= 40) { out['議題'].push(l.replace(/。$/, '')); return; }
       out['議事録メモ'].push(l.replace(/。$/, ''));
     });
     ['議題', '議事録メモ', '決定事項', 'ToDo'].forEach(function (k) { out[k] = out[k].join('\n'); });
@@ -840,6 +853,12 @@
           };
           if (isMinutes) {
             card.appendChild(el('div', 'font-size:14px;font-weight:bold;color:#1f3a6e;margin-top:4px', '① 音声の文字起こしを、ここに貼り付けます'));
+            // 録音のコツ：見出しの言葉を声に出すと、AIなしで、ほぼ正確に分かれる
+            var guide = el('details', 'margin:4px 0 6px;font-size:12px;color:#444;background:#f3f7fb;border:1px solid #d5e1ee;border-radius:6px;padding:4px 8px');
+            guide.setAttribute('data-guide', '1');
+            guide.appendChild(el('summary', 'cursor:pointer;font-weight:bold', '録音のコツ（この順に話すと、ほぼ自動で分かれます）'));
+            guide.appendChild(el('div', 'margin-top:4px;line-height:1.7', '「出席者は、〇〇さんと△△さんです」→「場所は、〇〇です」→「議題は、〇〇、△△です」→（内容は、ふつうに話す）→「決まったことは、〇〇、△△です」→「宿題は、10月25日までに、〇〇さんが、△△を出します」→「次回は、11月1日、〇〇です」'));
+            card.appendChild(guide);
             var src = el('textarea', 'width:100%;height:300px;box-sizing:border-box;font-size:14px;padding:8px;margin-top:4px;line-height:1.5;background:#f7fafc'); src.setAttribute('data-minutes-src', '1');
             card.appendChild(src);
             // Copilot を使う場合：①依頼文をコピー → ②Copilot を開く → 依頼文と、文字起こしを貼る → できた文章を、上の欄に貼る → 「かんたん整理」

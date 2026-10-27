@@ -244,3 +244,14 @@ test('Copilotの返事（太字・表・番号つき見出し）も、見出し�
   assert.match(lib.canonicalMinutes(bold), /^【出席者】\n太田、國井\n\n【場所】\n現場事務所/);
   assert.strictEqual(lib.canonicalMinutes('ふつうの文章です'), 'ふつうの文章です', '見出しが無い文章は、触らない');
 });
+
+test('summarizeLocal：見出しの言葉を言わない、ふつうの話し方（出席・場所・議題・決定・担当・次回）も、分けられる', () => {
+  let r = lib.summarizeLocal('今日は現場事務所で、太田さん、國井さん、元請の藤原さんが出席して打合せをしました。夜間規制の時間について確認しました。9時から17時で調整することになりました。資材の搬入は金曜の午前にします。藤原さんは近隣への周知をお願いします。次回は11月1日です。');
+  assert.strictEqual(r['場所'], '現場事務所'); assert.strictEqual(r['出席者'], '太田、國井、藤原（元請）'); assert.strictEqual(r['議題'], '夜間規制の時間');
+  assert.strictEqual(r['決定事項'], '9時から17時で調整することになりました\n資材の搬入は金曜の午前にします');
+  assert.strictEqual(r['ToDo'], '｜藤原｜近隣への周知'); assert.strictEqual(r['次回予定'], '11月1日');
+  r = lib.summarizeLocal('えー、本日はオンラインで、山田さんと鈴木さんが参加しました。工程表の見直しについて話し合いました。着工は11月上旬ということで合意しました。鈴木さんには見積書の再提出をお願いします。10月30日までに山田さんが工程表を共有します。');
+  assert.strictEqual(r['場所'], 'オンライン'); assert.strictEqual(r['出席者'], '山田、鈴木'); assert.strictEqual(r['議題'], '工程表の見直し');
+  assert.strictEqual(r['決定事項'], '着工は11月上旬ということで合意しました');
+  assert.strictEqual(r['ToDo'], '｜鈴木｜見積書の再提出\n10/30｜山田｜工程表を共有する');
+});

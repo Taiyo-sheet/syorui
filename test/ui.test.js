@@ -735,6 +735,7 @@ test('画面：議事録に、音声の文字起こしを貼り付けると、�
       await page.locator('[data-minutes-src]').waitFor();
     };
     await open();
+    assert.match(await page.locator('[data-guide]').textContent(), /出席者は.*場所は.*決まったことは.*次回は/, '録音のコツが、出る');
     assert.strictEqual(await page.getByRole('button', { name: 'AIで整理（未設定）' }).isDisabled(), true, '設定するまで、AIは押せない');
     await page.locator('[data-minutes-src]').fill('えー、出席者：太田、國井\n場所：現場事務所\n工程の確認について。\n夜間規制は9時から17時で決定しました。\n来週までに太田さんが見積書を送付します。\n次回は11月1日です。');
     // Copilot：依頼文をコピー／Copilotを開く
