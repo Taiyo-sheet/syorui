@@ -120,3 +120,36 @@ test('pdf-server /minutes（Vertex AI＝会社のGoogle Cloud）：鍵とプロ�
     });
   } finally { fake.close(); keys.forEach((k) => { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }); }
 });
+
+test('pdf-server /minutes（vertex-claude＝会社のGoogle Cloud の中の Claude）：モデルIDが無ければ503／rawPredictのURL・anthropic_version・返事の読み取り', async () => {
+  const http = require('node:http'); const crypto = require('node:crypto');
+  const { privateKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const seen = [];
+  const fake = http.createServer((req, res) => { const c = []; req.on('data', (x) => c.push(x)); req.on('end', () => {
+    const body = Buffer.concat(c).toString('utf8');
+    if (req.url === '/token') { res.writeHead(200, { 'Content-Type': 'application/json' }); return res.end(JSON.stringify({ access_token: 'tok-2' })); }
+    seen.push({ url: req.url, auth: req.headers.authorization, body: JSON.parse(body) });
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ content: [{ type: 'text', text: '{"出席者":"太田、國井","場所":"現場事務所","議題":["夜間規制"],"議事録メモ":"・9時から17時","決定事項":"・規制は9時から17時","ToDo":"・10/25｜太田｜見積書を出す","次回予定":"11月1日"}' }] }));
+  }); });
+  await new Promise((r) => fake.listen(0, '127.0.0.1', r)); const port = fake.address().port;
+  const keys = ['MINUTES_PROVIDER', 'MINUTES_MODEL', 'GOOGLE_SERVICE_ACCOUNT_JSON', 'GOOGLE_CLOUD_PROJECT', 'GOOGLE_CLOUD_LOCATION', 'GOOGLE_TOKEN_URL', 'VERTEX_BASE_URL']; const saved = {}; keys.forEach((k) => { saved[k] = process.env[k]; });
+  try {
+    await withServer({}, async (base) => {
+      const post = (t) => fetch(base + '/minutes', { method: 'POST', headers: { Origin: ORIGIN, 'Content-Type': 'application/json' }, body: JSON.stringify({ text: t }) });
+      process.env.MINUTES_PROVIDER = 'vertex-claude'; delete process.env.MINUTES_MODEL;
+      process.env.GOOGLE_SERVICE_ACCOUNT_JSON = JSON.stringify({ client_email: 'sa@p.iam.gserviceaccount.com', private_key: privateKey.export({ type: 'pkcs8', format: 'pem' }) });
+      process.env.GOOGLE_CLOUD_PROJECT = 'my-proj'; process.env.GOOGLE_TOKEN_URL = 'http://127.0.0.1:' + port + '/token'; process.env.VERTEX_BASE_URL = 'http://127.0.0.1:' + port; process.env.GOOGLE_CLOUD_LOCATION = 'us-east5';
+      assert.strictEqual((await post('あ')).status, 503, 'モデルIDが無ければ、動かない');
+      assert.deepStrictEqual(await (await fetch(base + '/minutes/status', { headers: { Origin: ORIGIN } })).json(), { ready: false });
+      process.env.MINUTES_MODEL = 'claude-test-model@20990101';
+      assert.deepStrictEqual(await (await fetch(base + '/minutes/status', { headers: { Origin: ORIGIN } })).json(), { ready: true });
+      const r = await post('今日の打合せです。'); assert.strictEqual(r.status, 200);
+      const j = await r.json(); assert.strictEqual(j['出席者'], '太田、國井'); assert.strictEqual(j['議題'], '夜間規制');
+      assert.strictEqual(seen[0].auth, 'Bearer tok-2');
+      assert.match(seen[0].url, /\/v1\/projects\/my-proj\/locations\/us-east5\/publishers\/anthropic\/models\/claude-test-model%4020990101:rawPredict$/);
+      assert.strictEqual(seen[0].body.anthropic_version, 'vertex-2023-10-16');
+      assert.match(seen[0].body.messages[0].content, /今日の打合せです/);
+    });
+  } finally { keys.forEach((k) => { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }); await new Promise((r) => fake.close(r)); }
+});

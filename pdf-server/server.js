@@ -39,7 +39,10 @@ const crypto = require('crypto');
 const b64u = (x) => Buffer.from(x).toString('base64').replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
 // 議事録のAIの呼び先：MINUTES_PROVIDER=anthropic（初期値）／vertex（会社のGoogle Cloud の Vertex AI＝Gemini。日本のリージョンで使う）
 const provider = () => (process.env.MINUTES_PROVIDER || 'anthropic').toLowerCase();
-const aiReady = () => provider() === 'vertex' ? !!(process.env.GOOGLE_SERVICE_ACCOUNT_JSON && process.env.GOOGLE_CLOUD_PROJECT) : !!process.env.ANTHROPIC_API_KEY;
+// vertex-claude＝会社のGoogle Cloud の Vertex AI の中の Claude（Anthropicのアカウント・キーは要らない。請求は、会社のGoogle Cloud）。MINUTES_MODEL に、Model Garden のClaudeのモデルIDを入れる
+const aiReady = () => provider() === 'vertex' ? !!(process.env.GOOGLE_SERVICE_ACCOUNT_JSON && process.env.GOOGLE_CLOUD_PROJECT)
+  : provider() === 'vertex-claude' ? !!(process.env.GOOGLE_SERVICE_ACCOUNT_JSON && process.env.GOOGLE_CLOUD_PROJECT && process.env.MINUTES_MODEL)
+  : !!process.env.ANTHROPIC_API_KEY;
 function toMinutes(raw) {
   const m = String(raw || '').match(/\{[\s\S]*\}/);
   if (!m) throw new Error('ai-no-json');
@@ -70,6 +73,20 @@ async function callVertex(text) {
   if (!r.ok) throw new Error('vertex-status-' + r.status);
   const j = await r.json();
   return toMinutes((((j.candidates || [])[0] || {}).content || {}).parts ? j.candidates[0].content.parts.map((x) => x.text || '').join('') : '');
+}
+// 会社のGoogle Cloud（Vertex AI）の中の Claude を呼ぶ
+async function callVertexClaude(text) {
+  const loc = process.env.GOOGLE_CLOUD_LOCATION || 'global';   // Claudeのモデルごとに、使える場所が違う（Model Garden のページで確認）
+  const host = loc === 'global' ? 'aiplatform.googleapis.com' : loc + '-aiplatform.googleapis.com';
+  const base = (process.env.VERTEX_BASE_URL || 'https://' + host).replace(/\/$/, '');
+  const url = base + '/v1/projects/' + encodeURIComponent(process.env.GOOGLE_CLOUD_PROJECT) + '/locations/' + loc + '/publishers/anthropic/models/' + encodeURIComponent(process.env.MINUTES_MODEL) + ':rawPredict';
+  const r = await fetch(url, {
+    method: 'POST', headers: { authorization: 'Bearer ' + (await googleToken()), 'content-type': 'application/json' },
+    body: JSON.stringify({ anthropic_version: 'vertex-2023-10-16', max_tokens: 3000, system: MINUTES_SYSTEM, messages: [{ role: 'user', content: '【文字起こし】\n' + text }] }),
+  });
+  if (!r.ok) throw new Error('vertex-claude-status-' + r.status);
+  const j = await r.json();
+  return toMinutes(((j.content || []).find((c) => c.type === 'text') || {}).text || '');
 }
 async function callMinutesAI(text) {
   const base = (process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com').replace(/\/$/, '');
@@ -135,7 +152,7 @@ function createServer(opts) {
         let text = ''; try { text = String(JSON.parse(Buffer.concat(parts).toString('utf8')).text || ''); } catch (e) { return send(400, 'JSONではありません'); }
         if (!text.trim()) return send(400, '文字起こしが空です');
         if (text.length > MAX_MINUTES_CHARS) return send(413, '長すぎます（' + MAX_MINUTES_CHARS + '文字まで）');
-        try { send(200, JSON.stringify(provider() === 'vertex' ? await callVertex(text) : await callMinutesAI(text)), 'application/json; charset=utf-8'); }
+        try { send(200, JSON.stringify(provider() === 'vertex' ? await callVertex(text) : provider() === 'vertex-claude' ? await callVertexClaude(text) : await callMinutesAI(text)), 'application/json; charset=utf-8'); }
         catch (e) { send(502, 'AIの整理に失敗しました'); console.error('minutes failed:', e.message); }   // 文章の中身は、ログに出さない
       });
       return;
