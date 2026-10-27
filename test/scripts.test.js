@@ -247,3 +247,42 @@ test('add-approval-fields：表がなければ止まる／確認だけは変え�
     assert.strictEqual(r.code, 0, r.out); assert.match(r.out, /すでにあります/);
   });
 });
+
+test('safe-deploy：対象外のアプリは断る／--dry は何も変えない／反映後に、フォームが同じことと、ファイルが手元と同じことを確かめる', async () => {
+  await withMock(async (mock, env) => {
+    mock.addApp('575', '案件くん');
+    mock.state.apps['575'].layout = [{ type: 'ROW', fields: [{ type: 'SINGLE_LINE_TEXT', code: 'c_name', size: { width: '200' } }] }];
+    let r = await run('safe-deploy.js', ['--app=608'], env);
+    assert.strictEqual(r.code, 1); assert.match(r.out, /575.*879/);
+    r = await run('safe-deploy.js', ['--app=575', '--dry', '--tests-already-passed'], env);
+    assert.strictEqual(r.code, 0, r.out); assert.match(r.out, /編集中の変更：なし/); assert.match(r.out, /何も変えていません/);
+    assert.ok(!mock.state.log.includes('PUT /k/v1/preview/app/customize'), '--dry では、登録しない');
+    r = await run('safe-deploy.js', ['--app=575', '--tests-already-passed'], env);
+    assert.strictEqual(r.code, 0, r.out);
+    assert.match(r.out, /② バックアップ：/); assert.match(r.out, /⑤ 確認：フォームの並び・項目は、反映前と同じ/); assert.match(r.out, /完了しました/);
+    assert.ok(mock.state.log.includes('PUT /k/v1/preview/app/customize'));
+    const names = mock.state.apps['575'].customize.desktop.js.map((x) => x.url || x.file.name);
+    assert.ok(names.includes('doc-button.js'), '登録された');
+    fs.readdirSync(env.KINTONE_BACKUP_DIR).forEach((n) => fs.rmSync(path.join(env.KINTONE_BACKUP_DIR, n), { recursive: true, force: true }));
+  });
+});
+
+test('safe-deploy：反映後に、フォームが変わっていたら、自動で、反映前のJavaScriptの登録に戻す', async () => {
+  await withMock(async (mock, env) => {
+    mock.addApp('575', '案件くん');
+    const oldKey = mock.addFile(Buffer.from('/* 元のJS */'), 'existing.js');
+    mock.state.apps['575'].customize.desktop.js = [{ type: 'FILE', file: { fileKey: oldKey, name: 'existing.js' } }];
+    mock.state.apps['575'].layout = [{ type: 'ROW', fields: [{ type: 'SINGLE_LINE_TEXT', code: 'c_name', size: { width: '200' } }] }];
+    // 登録された直後に、だれかが、フォームを変えた、という状況をつくる
+    const t = setInterval(() => { if (mock.state.log.includes('PUT /k/v1/preview/app/customize') && mock.state.apps['575'].layout.length === 1) mock.state.apps['575'].layout = mock.state.apps['575'].layout.concat([{ type: 'ROW', fields: [{ type: 'SINGLE_LINE_TEXT', code: 'c_new', size: { width: '200' } }] }]); }, 5);
+    try {
+      const r = await run('safe-deploy.js', ['--app=575', '--tests-already-passed'], env);
+      assert.strictEqual(r.code, 15, r.out);
+      assert.match(r.out, /フォームの並びが、反映前と違います/); assert.match(r.out, /戻しました/);
+      const names = mock.state.apps['575'].customize.desktop.js.map((x) => x.url || x.file.name);
+      assert.deepStrictEqual(names, ['existing.js'], '反映前の登録に戻った');
+      const key = mock.state.apps['575'].customize.desktop.js[0].file.fileKey;
+      assert.strictEqual(mock.state.files[key].buf.toString(), '/* 元のJS */', '元のファイルの中身');
+    } finally { clearInterval(t); fs.readdirSync(env.KINTONE_BACKUP_DIR).forEach((n) => fs.rmSync(path.join(env.KINTONE_BACKUP_DIR, n), { recursive: true, force: true })); }
+  });
+});
