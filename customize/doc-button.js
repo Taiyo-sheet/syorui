@@ -1182,34 +1182,48 @@
   // 書類関係のタブの中に、保存した書類の一覧を見せる（書類保管の表は、フォームの一番下に、動かさずに置いてあるため）。
   // 表は動かさず、画面に、読み取り用の一覧を出すだけ。PCでは、「開く」で、ダウンロードできる
   var HIDE_TABLE_ON_DETAIL = true;   // 詳細画面で、書類保管の表を隠す（false にすると、表が、また出る）
+  var savedToken = 0;   // 画面を開くたびに増やす。古い呼び出しの一覧は、消えて、最新のものだけが残る（枠が、2つ出ないように）
   function savedBox(record) {
-    var rows = rowsOf(record).map(function (r) {
-      var f = r.value[SUB.file] && r.value[SUB.file].value, pf = SUB.pdf && r.value[SUB.pdf] && r.value[SUB.pdf].value;
-      return { name: cellText(r, SUB.name), version: cellText(r, SUB.version), at: cellText(r, SUB.at), status: cellText(r, SUB.status), file: f && f[0], pdf: pf && pf[0] };
-    }).filter(function (x) { return x.name; }).sort(function (a, b) { return a.at < b.at ? 1 : a.at > b.at ? -1 : 0; });
+    var my = ++savedToken;
+    var toRows = function (rec) {
+      return rowsOf(rec).map(function (r) {
+        var f = r.value[SUB.file] && r.value[SUB.file].value, pf = SUB.pdf && r.value[SUB.pdf] && r.value[SUB.pdf].value;
+        return { name: cellText(r, SUB.name), version: cellText(r, SUB.version), at: cellText(r, SUB.at), status: cellText(r, SUB.status), file: f && f[0], pdf: pf && pf[0] };
+      }).filter(function (x) { return x.name; }).sort(function (a, b) { return a.at < b.at ? 1 : a.at > b.at ? -1 : 0; });
+    };
     Array.prototype.forEach.call(document.querySelectorAll('[data-doc-saved]'), function (o) { if (o.parentNode) o.parentNode.removeChild(o); });
     var box = el('details', 'margin:4px 0 8px;border:1px solid #cfd8e3;border-radius:6px;background:#fff;padding:6px 10px;max-width:760px');
     box.setAttribute('data-doc-saved', '1');
-    box.appendChild(el('summary', 'cursor:pointer;font-weight:bold;font-size:14px', '保存した書類（' + rows.length + '件）'));
-    if (!rows.length) { box.appendChild(el('div', 'font-size:12px;color:#666;margin-top:6px', 'まだ、保存した書類は、ありません。「書類を作る」で作ると、ここに出ます。')); }
-    rows.slice(0, 30).forEach(function (x) {
-      var line = el('div', 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;border-top:1px solid #eee;padding:5px 0;font-size:13px');
-      line.appendChild(el('div', 'flex:1;min-width:180px', x.name + (x.version ? '　v' + x.version : '') + (x.at ? '　' + x.at : '') + (x.status ? '　［' + x.status + '］' : '')));
-      [[x.file, isMobile ? '内容を見る' : '開く'], [x.pdf, 'PDF']].forEach(function (p) {
-        if (!p[0] || (isMobile && p[1] === 'PDF')) return;
-        var b = el('button', 'padding:' + (isMobile ? '8px 14px' : '3px 10px') + ';font-size:' + (isMobile ? '14px' : '12px') + ';cursor:pointer', p[1]); b.type = 'button';
-        b.addEventListener('click', function () { b.disabled = true; download(p[0].fileKey).then(function (d) { saveAs(d, p[0].name); b.disabled = false; }, function () { b.disabled = false; }); });
-        line.appendChild(b);
+    var head = el('summary', 'cursor:pointer;font-weight:bold;font-size:14px', '保存した書類'); box.appendChild(head);
+    var body = el('div'); box.appendChild(body);
+    var render = function (rows) {
+      head.textContent = '保存した書類（' + rows.length + '件）';
+      body.textContent = '';
+      if (!rows.length) { body.appendChild(el('div', 'font-size:12px;color:#666;margin-top:6px', 'まだ、保存した書類は、ありません。「書類を作る」で作ると、ここに出ます。')); }
+      rows.slice(0, 30).forEach(function (x) {
+        var line = el('div', 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;border-top:1px solid #eee;padding:5px 0;font-size:13px');
+        line.appendChild(el('div', 'flex:1;min-width:180px', x.name + (x.version ? '　v' + x.version : '') + (x.at ? '　' + x.at : '') + (x.status ? '　［' + x.status + '］' : '')));
+        [[x.file, isMobile ? '内容を見る' : '開く'], [x.pdf, 'PDF']].forEach(function (p) {
+          if (!p[0] || (isMobile && p[1] === 'PDF')) return;
+          var b = el('button', 'padding:' + (isMobile ? '8px 14px' : '3px 10px') + ';font-size:' + (isMobile ? '14px' : '12px') + ';cursor:pointer', p[1]); b.type = 'button';
+          b.addEventListener('click', function () { b.disabled = true; download(p[0].fileKey).then(function (d) { saveAs(d, p[0].name); b.disabled = false; }, function () { b.disabled = false; }); });
+          line.appendChild(b);
+        });
+        body.appendChild(line);
       });
-      box.appendChild(line);
-    });
-    if (rows.length > 30) box.appendChild(el('div', 'font-size:12px;color:#666;margin-top:4px', '新しい30件を表示しています。すべては、「依頼管理履歴」のタブの下の、書類保管の表です。'));
+      if (rows.length > 30) body.appendChild(el('div', 'font-size:12px;color:#666;margin-top:4px', '新しい30件を表示しています。すべては、「依頼管理履歴」のタブの下の、書類保管の表です。'));
+    };
+    // 画面のイベントの記録は、表が欠けていることがある。件数は、案件の記録を、読み直して出す（読めるまでは、イベントの記録で出す）
+    var first = toRows(record);
+    if (first.length) render(first); else head.textContent = '保存した書類（読み込み中…）';
+    projectRecord(recApi.getId()).then(function (rec) { if (my === savedToken) render(toRows(rec)); }, function () { if (my === savedToken && !first.length) render([]); });
     // 書類を作るボタンの、すぐ下に置く。ボタンが出ている間（＝書類関係のタブ）だけ見せる
     var tries = 0;
     var timer = setInterval(function () {
+      if (my !== savedToken) { clearInterval(timer); if (box.parentNode) box.parentNode.removeChild(box); return; }   // 新しい呼び出しがあれば、古いものは、やめる
       var hub = document.querySelector('[data-doc-hub]');
       if (!hub) { if (++tries > 50 && !document.body.contains(box)) clearInterval(timer); return; }
-      if (hub.nextSibling !== box && !(hub.parentNode && box.parentNode === hub.parentNode && hub.nextSibling === box)) hub.parentNode.insertBefore(box, hub.nextSibling);
+      if (hub.nextSibling !== box) hub.parentNode.insertBefore(box, hub.nextSibling);
       box.style.display = hub.style.display === 'none' ? 'none' : 'block';
     }, 500);
   }
