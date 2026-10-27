@@ -68,7 +68,7 @@ async function main() {
   else {
     const t = sh('node', ['--test'].concat(fs.readdirSync(path.join(ROOT, 'test')).filter((f) => f.endsWith('.test.js')).map((f) => 'test/' + f)));
     const sum = (t.out.match(/# tests (\d+)[\s\S]*?# pass (\d+)[\s\S]*?# fail (\d+)/) || []);
-    if (t.code !== 0) { say('① 自動テスト：失敗（' + (sum[3] || '?') + '件）。反映を止めました。'); process.exit(10); }
+    if (t.code !== 0) { say('① 自動テスト：失敗（' + (sum[3] || '?') + '件）。反映を止めました。\n  ' + (t.out.match(/^not ok .*$/gm) || []).join('\n  ')); process.exit(10); }
     say('① 自動テスト：すべて通りました（' + (sum[2] || '?') + '件）');
   }
 
