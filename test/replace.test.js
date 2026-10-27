@@ -227,3 +227,20 @@ test('summarizeLocal：話すときに、見出しの言葉（出席者は／場
   assert.strictEqual(r['次回予定'], '11月1日、現場事務所');
   assert.match(r['議事録メモ'], /9時から17時で調整する方向/);
 });
+
+test('Copilotの返事（太字・表・番号つき見出し）も、見出しごとに分けられる／枠に貼った文章は、見出しの形に整う', () => {
+  const bold = '**出席者**\n- 太田\n- 國井\n\n**場所**\n現場事務所\n\n**決定事項**\n- 規制は9時から17時\n\n**ToDo**\n- 10/25｜太田｜見積書を出す';
+  let r = lib.summarizeLocal(bold);
+  assert.strictEqual(r['出席者'], '太田、國井'); assert.strictEqual(r['場所'], '現場事務所');
+  assert.strictEqual(r['決定事項'], '・規制は9時から17時'); assert.strictEqual(r['ToDo'], '・10/25｜太田｜見積書を出す');
+  const inline = '以下にまとめました。\n\n**【出席者】** 太田、國井\n**【場所】** 現場事務所\n**【ToDo】**\n・10/25｜太田｜見積書を出す';
+  r = lib.summarizeLocal(inline); assert.strictEqual(r['出席者'], '太田、國井'); assert.strictEqual(r['場所'], '現場事務所');
+  const table = '| 項目 | 内容 |\n|---|---|\n| 出席者 | 太田、國井 |\n| 場所 | 現場事務所 |\n| 決定事項 | 規制は9時から17時 |';
+  r = lib.summarizeLocal(table); assert.strictEqual(r['出席者'], '太田、國井'); assert.strictEqual(r['決定事項'], '・規制は9時から17時');
+  assert.doesNotMatch(lib.stripMarkdown('**太字** と `コード` と __下線__'), /\*\*|`|__/);
+  // 整える：【見出し】が2つ以上あれば、そのまま／太字だけの返事は、見出しの形に
+  const ok = '【出席者】\n太田\n\n【場所】\n現場';
+  assert.strictEqual(lib.canonicalMinutes(ok), ok);
+  assert.match(lib.canonicalMinutes(bold), /^【出席者】\n太田、國井\n\n【場所】\n現場事務所/);
+  assert.strictEqual(lib.canonicalMinutes('ふつうの文章です'), 'ふつうの文章です', '見出しが無い文章は、触らない');
+});

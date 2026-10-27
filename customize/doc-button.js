@@ -239,10 +239,25 @@
     for (var i = 0; i < HEAD.length; i++) { if (HEAD[i][1].test(t)) return HEAD[i][0]; }
     return '';
   }
+  // Copilotなどの返事の、飾り（太字の ** ・表の | ・コード記号）を取って、ふつうの文章に直す
+  //   「| 出席者 | 太田 |」は「出席者：太田」に、「**出席者**」は「出席者」に
+  function stripMarkdown(text) {
+    return String(text || '').replace(/\r/g, '').split('\n').map(function (l) {
+      var t = l.trim();
+      if (/^\|.*\|$/.test(t)) {
+        if (/^\|[\s:\-|]+\|$/.test(t)) return '';   // 表の罫線の行（|---|---|）
+        var cells = t.slice(1, -1).split('|').map(function (c) { return c.trim(); });
+        if (cells.length >= 2 && /^(項目|見出し|区分)$/.test(cells[0]) && /^(内容|詳細|値)$/.test(cells[1])) return '';   // 表の見出しの行
+        return cells.length >= 2 ? cells[0] + '：' + cells.slice(1).join(' ') : cells[0];
+      }
+      return l.replace(/\*\*|__|`/g, '');
+    }).join('\n');
+  }
   function summarizeByHeadings(text) {
-    var lines = String(text || '').replace(/\r/g, '').split('\n').map(function (l) { return l.trim(); }).filter(Boolean);
-    var onlyHeads = lines.filter(function (l) { return headOf(l); }).length;
-    if (onlyHeads < 2) return null;   // 見出しだけの行が、2つ以上あるときだけ、見出しで振り分ける
+    var lines = stripMarkdown(text).split('\n').map(function (l) { return l.trim(); }).filter(Boolean);
+    var INL = /^[\s■□◆◇●○▼▽【\[#＃*・\-]*([^:：】\]\s]{1,10})[】\]]?\s*[:：]?\s*(.+)$/;
+    var onlyHeads = lines.filter(function (l) { if (headOf(l)) return true; var m = l.match(INL); return !!(m && headOf(m[1]) && /^[【\[]|[:：]/.test(l.slice(0, (m[1].length) + 3))); }).length;
+    if (onlyHeads < 2) return null;   // 見出し（見出しだけの行、または「【出席者】太田」「決定事項：…」の形の行）が、2つ以上あるときだけ、見出しで振り分ける
     var out = { '出席者': [], '場所': [], '議題': [], '議事録メモ': [], '決定事項': [], 'ToDo': [], '次回予定': [] }, cur = '';
     lines.forEach(function (line) {
       var hk = headOf(line);
@@ -258,7 +273,16 @@
     });
     return res;
   }
+  // 「まとまった議事録」の枠の文章を、きちんとした見出し（【出席者】…）の形に整える。
+  //   すでに【見出し】が2つ以上あれば、そのまま。Copilotの返事（太字・表・番号つき見出し）は、見出しの形に直す
+  function canonicalMinutes(t) {
+    var s = String(t || '');
+    if ((s.match(/^【(?:出席者|場所|議題|打合せ内容|決定事項|ToDo|次回予定)】/gm) || []).length >= 2) return s;
+    var r = summarizeByHeadings(s);
+    return r ? formatMinutes(r) : s;
+  }
   function summarizeLocal(text) {
+    text = stripMarkdown(text);
     var byHead = summarizeByHeadings(text); if (byHead) return byHead;
     var out = { '出席者': '', '場所': '', '議題': [], '議事録メモ': [], '決定事項': [], 'ToDo': [], '次回予定': '' };
     var FILLER = /^(えー+|あー+|えっと|あの+|その+|まあ|はい|ええ|うん|そうですね)[、。,\s]*/;
@@ -409,7 +433,7 @@
   // Node（テスト）から使うときは、ここまでの部品だけを渡して終わる
   if (typeof kintone === 'undefined') {
     if (typeof module !== 'undefined' && module.exports) {
-      module.exports = { emptyFieldsOf: emptyFieldsOf, formatMinutes: formatMinutes, maskForAI: maskForAI, summarizeLocal: summarizeLocal, checkText: checkText, extractText: extractText, tidyMemo: tidyMemo, fieldText: fieldText, replacePlaceholders: replacePlaceholders, fillTemplate: fillTemplate, hasPlaceholders: hasPlaceholders, guessTarget: guessTarget, buildFilename: buildFilename, buildValues: buildValues, quote: quote, SUB: SUB, MF: MF, today: today };
+      module.exports = { canonicalMinutes: canonicalMinutes, stripMarkdown: stripMarkdown, emptyFieldsOf: emptyFieldsOf, formatMinutes: formatMinutes, maskForAI: maskForAI, summarizeLocal: summarizeLocal, checkText: checkText, extractText: extractText, tidyMemo: tidyMemo, fieldText: fieldText, replacePlaceholders: replacePlaceholders, fillTemplate: fillTemplate, hasPlaceholders: hasPlaceholders, guessTarget: guessTarget, buildFilename: buildFilename, buildValues: buildValues, quote: quote, SUB: SUB, MF: MF, today: today };
     }
     return;
   }
@@ -865,6 +889,7 @@
             var inp = a.type === 'doc' ? el('textarea', 'width:100%;height:150px;box-sizing:border-box;font-size:14px;padding:8px;line-height:1.5') : a.type === 'memo' ? el('textarea', 'width:100%;height:160px;box-sizing:border-box;font-size:14px;padding:6px') : el('input', 'width:100%;box-sizing:border-box;font-size:14px;padding:6px');
             if (a.type === 'date') { inp.type = 'date'; inp.value = isoToday(); } else if (a.type === 'text') { inp.type = 'text'; if (a.init) inp.value = a.init(); }
             inp.setAttribute('data-ask', a.key); inputs[a.key] = inp; card.appendChild(inp);
+            if (a.key === '議事録本文') inp.addEventListener('paste', function () { setTimeout(function () { var c = canonicalMinutes(inp.value); if (c !== inp.value) { inp.value = c; note.style.color = '#1f7a3d'; note.textContent = '貼り付けた文章を、見出し（【出席者】など）の形に、整えました。内容を確認してください。'; } }, 0); });   // Copilotの返事（太字・表）を、貼ったとき、自動で整える
           });
           var bar = el('div', 'margin-top:12px;display:flex;gap:8px;justify-content:flex-end');
           var cancel = el('button', 'padding:8px 14px;cursor:pointer', 'やめる'); cancel.type = 'button';
@@ -877,7 +902,7 @@
               if (!inputs[a.key]) { v[a.key] = askDefault(a); return; }   // 入力欄を出さなかった項目は、初期値（打合せ日は今日、作成者は開いた人）
               var t = inputs[a.key].value;
               if (a.type === 'date') { var m = t.match(/^(\d{4})-(\d{2})-(\d{2})$/); t = m ? m[1] + '年' + Number(m[2]) + '月' + Number(m[3]) + '日' : t; }
-              v[a.key] = a.type === 'memo' ? tidyMemo(t) : a.type === 'doc' ? t.replace(/\s+$/, '') : t.trim();
+              v[a.key] = a.type === 'memo' ? tidyMemo(t) : a.type === 'doc' ? canonicalMinutes(t).replace(/\s+$/, '') : t.trim();
               if (!v[a.key]) v[a.key] = askDefault(a);
             });
             close(v);
