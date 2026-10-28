@@ -229,14 +229,25 @@ test('書類マスタ：「雛形の状況」の一覧（雛形の有無・案�
     const row = (n, d) => ({ id: '1', value: { 書類保管_書類名: { value: n }, 書類保管_作成日: { value: d } } });
     mock.state.records['575'][0]['書類保管'] = { type: 'SUBTABLE', value: [row('良い書類', '2026-10-01'), row('良い書類', '2026-10-20')] };
     const good = mock.addFile(await docxWith('{{工事名称}}'), 'good.docx'), typo = mock.addFile(await docxWith('{{工事名称々}}'), 'typo.docx');
-    const mk = (n, st, f) => mock.addRecord('10', { 書類名: { value: n }, 工程: { value: st }, 表示順: { value: '1' }, 使用状況: { value: '使用中' }, 雛形: { value: f } });
-    mk('良い書類', '打合せ', [{ fileKey: good, name: 'good.docx' }]); mk('打ち間違いの書類', '打合せ', [{ fileKey: typo, name: 'typo.docx' }]); mk('雛形のない書類', '竣工', []);
+    const mk = (n, st, f, aud, use) => mock.addRecord('10', { 書類名: { value: n }, 工程: { value: st }, 表示順: { value: '1' }, 使用状況: { value: use || '使用中' }, 見られる立場: { value: aud || [] }, 雛形: { value: f } });
+    mk('良い書類', '打合せ', [{ fileKey: good, name: 'good.docx' }], ['施工店']); mk('打ち間違いの書類', '打合せ', [{ fileKey: typo, name: 'typo.docx' }], ['施工店', '工事部']); mk('雛形のない書類', '竣工', [], ['工事部']); mk('古い書類', '竣工', [], ['施工店'], '廃止');
     const { page, errors } = await setup(mock, url, browser);
-    await page.evaluate(() => window.__fire('app.record.index.show', {}));
-    await page.locator('[data-master-dash] summary').click();
-    await page.getByText(/書類 3 件　雛形なし 1 件/).waitFor();
+    await page.evaluate(() => window.__fire('app.record.index.show', {}));   // 最初から、開いている
+    await page.getByText(/書類 3 件　雛形あり 2 件　雛形なし 1 件/).waitFor();   // 廃止の書類は、ふだんは、数えない
     const t = await page.locator('[data-master-dash]').textContent();
-    assert.match(t, /良い書類.*good\.docx.*2.*2026-10-20/); assert.match(t, /雛形のない書類未登録/);
+    assert.match(t, /良い書類.*good\.docx.*2.*2026-10-20/); assert.match(t, /雛形のない書類.*未登録/);
+    // 立場のボタンで、絞り込める（廃止は、ふだんは出ない）
+    await page.locator('[data-aud="工事部"]').click();
+    await page.getByText(/工事部用の書類 2 件　雛形あり 1 件　雛形なし 1 件/).waitFor();
+    await page.locator('[data-aud="施工店"]').click();
+    await page.getByText(/施工店用の書類 2 件/).waitFor();
+    await page.locator('[data-filter-old]').click();
+    await page.getByText(/施工店用の書類 3 件/).waitFor();
+    assert.match(await page.locator('[data-master-dash]').textContent(), /古い書類（廃止）/);
+    await page.locator('[data-filter-old]').click();
+    await page.locator('[data-filter-file]').click();
+    await page.getByText(/施工店用の書類 2 件　雛形あり 2 件　雛形なし 0 件/).waitFor();
+    await page.locator('[data-filter-file]').click(); await page.locator('[data-aud="all"]').click();
     await page.locator('[data-master-check-all]').click();
     await page.getByText(/2件を点検：注意 1 件/).waitFor();
     const t2 = await page.locator('[data-master-dash]').textContent();
