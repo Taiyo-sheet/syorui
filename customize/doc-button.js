@@ -290,7 +290,7 @@
     var items = [];
     SORT_CATS.forEach(function (c) {
       var v = String((res && res[c[0]]) || '').trim(); if (!v || v === 'なし' || v === '不明') return;
-      var parts = c[0] === '出席者' ? v.split(/[、,，]/) : c[0] === '場所' || c[0] === '次回予定' ? [v] : v.split('\n');
+      var parts = c[0] === '出席者' || c[0] === '場所' || c[0] === '次回予定' ? [v] : v.split('\n');   // 出席者・場所・次回予定は、1つの枠（1行にまとめて直せる）
       parts.forEach(function (t) { t = t.replace(/^[\s・\-*●•‣]+/, '').trim(); if (t) items.push({ cat: c[0], text: t }); });
     });
     return items;
@@ -898,20 +898,28 @@
             sortBox.textContent = '';
             if (!inputs['議事録本文'] || !items.length) { sortBox.style.display = 'none'; return; }
             sortBox.style.display = 'block';
-            sortBox.appendChild(el('div', 'font-size:14px;font-weight:bold;color:#1f3a6e;margin-bottom:4px', '仕分け（まちがいは、1行ずつ、ここで直せます）'));
-            sortBox.appendChild(el('div', 'font-size:12px;color:#666;margin-bottom:6px', '左の選択で、項目を変えられます。文は、そのまま、直せます。直すと、下の③に反映されます。'));
+            sortBox.appendChild(el('div', 'font-size:' + (isMobile ? '16px' : '14px') + ';font-weight:bold;color:#1f3a6e;margin-bottom:2px', '仕分け（まちがいは、ここで直せます）'));
+            sortBox.appendChild(el('div', 'font-size:12px;color:#666;margin-bottom:6px', '上の色つきの選択で、項目を変えられます。文は、そのまま直せます。直すと、下の③に反映されます。'));
             var sync = function () { inputs['議事録本文'].value = formatMinutes(sortResOf(items)); };
+            var COLORS = { '出席者': '#2f6fb5', '場所': '#1f8a8a', '議題': '#7a4fb3', '議事録メモ': '#6b7280', '決定事項': '#2e8b57', 'ToDo': '#d9822b', '次回予定': '#a0642d' };
             items.forEach(function (it, i) {
-              var row = el('div', 'display:flex;gap:6px;align-items:center;margin:3px 0'); row.setAttribute('data-sort-row', String(i));
-              var sel = el('select', 'font-size:' + (isMobile ? '15px' : '13px') + ';padding:' + (isMobile ? '8px 4px' : '4px 2px') + ';flex:0 0 auto;max-width:34%');
+              // 1件ずつの「カード」：項目は色つきの帯、文は、全部が見える枠（長い文も、途中で切れない）
+              var col = COLORS[it.cat] || '#6b7280';
+              var row = el('div', 'margin:8px 0;padding:8px;border:1px solid #d9dee5;border-left:6px solid ' + col + ';border-radius:6px;background:#fff'); row.setAttribute('data-sort-row', String(i));
+              var top = el('div', 'display:flex;gap:8px;align-items:center;margin-bottom:6px');
+              var sel = el('select', 'flex:1 1 auto;font-size:' + (isMobile ? '16px' : '14px') + ';font-weight:bold;padding:' + (isMobile ? '10px 6px' : '5px 4px') + ';border:2px solid ' + col + ';border-radius:4px;background:#fff;color:#222');
               SORT_CATS.forEach(function (c) { var o = document.createElement('option'); o.value = c[0]; o.textContent = c[1]; if (c[0] === it.cat) o.selected = true; sel.appendChild(o); });
-              sel.addEventListener('change', function () { it.cat = sel.value; sync(); });
-              var inp = el('input', 'flex:1 1 auto;min-width:0;font-size:' + (isMobile ? '15px' : '13px') + ';padding:' + (isMobile ? '8px' : '4px') + ';box-sizing:border-box'); inp.type = 'text'; inp.value = it.text;
-              inp.addEventListener('input', function () { it.text = inp.value; sync(); });
-              var del = el('button', 'flex:0 0 auto;padding:' + (isMobile ? '8px 10px' : '3px 8px') + ';cursor:pointer;font-size:12px', '消す'); del.type = 'button';
+              sel.addEventListener('change', function () { it.cat = sel.value; var c2 = COLORS[it.cat] || '#6b7280'; row.style.borderLeftColor = c2; sel.style.borderColor = c2; sync(); });
+              var del = el('button', 'flex:0 0 auto;padding:' + (isMobile ? '10px 16px' : '5px 12px') + ';cursor:pointer;font-size:' + (isMobile ? '15px' : '13px') + ';border:1px solid #c0c7d0;border-radius:4px;background:#f6f7f9', '消す'); del.type = 'button';
               del.addEventListener('click', function () { it.text = ''; row.parentNode.removeChild(row); sync(); });
-              row.appendChild(sel); row.appendChild(inp); row.appendChild(del); sortBox.appendChild(row);
+              top.appendChild(sel); top.appendChild(del);
+              var ta = el('textarea', 'width:100%;box-sizing:border-box;font-size:' + (isMobile ? '16px' : '14px') + ';line-height:1.6;padding:8px;border:1px solid #c9d0d9;border-radius:4px;resize:vertical;overflow:hidden;min-height:42px'); ta.rows = 1; ta.value = it.text;
+              var fit = function () { ta.style.height = 'auto'; ta.style.height = Math.max(42, ta.scrollHeight + 2) + 'px'; };
+              ta.addEventListener('input', function () { it.text = ta.value; fit(); sync(); });
+              row.appendChild(top); row.appendChild(ta); sortBox.appendChild(row);
+              setTimeout(fit, 0);
             });
+            if (sortBox.scrollIntoView) setTimeout(function () { try { sortBox.scrollIntoView({ block: 'start', behavior: 'smooth' }); } catch (e) {} }, 50);   // 整理したら、仕分けの場所へ、画面を動かす
           }
           var fillFrom = function (res) {
             if (inputs['議事録本文']) { inputs['議事録本文'].value = formatMinutes(res); renderSort(res); return; }

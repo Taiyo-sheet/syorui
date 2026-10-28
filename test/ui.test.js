@@ -914,14 +914,14 @@ test('画面：仕分け画面（1行ずつ、項目を選び直す・消す→�
     await page.locator('[data-minutes-src]').fill('出席者は、太田さんと國井さんです。\n議題は、夜間規制の時間です。\n決まったことは、規制は9時から17時です。\n10月25日までに太田さんが見積書を出します。\n次回は、11月1日です。');
     await page.getByRole('button', { name: 'かんたん整理（外部に送りません）' }).click();
     await page.locator('[data-sort-row]').first().waitFor();
-    const idx = (t) => page.locator('[data-sort-row] input').evaluateAll((els, w) => els.findIndex((e) => e.value === w), t);
+    const idx = (t) => page.locator('[data-sort-row] textarea').evaluateAll((els, w) => els.findIndex((e) => e.value === w), t);
     const box = () => page.locator('[data-ask="議事録本文"]').inputValue();
-    assert.ok((await page.locator('[data-sort-row]').count()) >= 5, '1行ずつ出る');
+    assert.ok((await page.locator('[data-sort-row]').count()) >= 5, 'カードが、1件ずつ出る');
     // 議題の「夜間規制の時間」を、決定事項に動かす → ③に反映
     await page.locator('[data-sort-row]').nth(await idx('夜間規制の時間')).locator('select').selectOption('決定事項');
     assert.match(await box(), /【議題】\nなし/); assert.match(await box(), /【決定事項】\n[\s\S]*夜間規制の時間/);
     // 文を直す → ③に反映
-    await page.locator('[data-sort-row]').nth(await idx('太田')).locator('input').fill('太田（TS）');
+    await page.locator('[data-sort-row]').nth(await idx('太田、國井')).locator('textarea').fill('太田（TS）、國井');
     assert.match(await box(), /【出席者】\n太田（TS）、國井/);
     // 消す → ③から無くなる
     await page.locator('[data-sort-row]').nth(await idx('規制は9時から17時')).getByRole('button', { name: '消す' }).click();
