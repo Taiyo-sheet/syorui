@@ -156,7 +156,7 @@ test('summarizeLocal：文字起こしを、決定事項・ToDo・次回予定�
   const r = lib.summarizeLocal(t);
   assert.strictEqual(r['出席者'], '太田、國井、藤原'); assert.strictEqual(r['場所'], '現場事務所');
   assert.match(r['議題'], /工程の確認について/); assert.match(r['決定事項'], /夜間規制.*決定/);
-  assert.match(r['ToDo'], /来週までに太田さんが見積書を送付/); assert.match(r['議事録メモ'], /雪が多い/); assert.doesNotMatch(r['議事録メモ'], /^あの/);
+  assert.strictEqual(r['ToDo'], '来週｜太田｜見積書を送付する'); assert.match(r['議事録メモ'], /雪が多い/); assert.doesNotMatch(r['議事録メモ'], /^あの/);
   assert.match(r['次回予定'], /11月1日/);
   assert.deepStrictEqual(lib.summarizeLocal(''), { '出席者': '', '場所': '', '議題': '', '議事録メモ': '', '決定事項': '', 'ToDo': '', '次回予定': '' });
 });

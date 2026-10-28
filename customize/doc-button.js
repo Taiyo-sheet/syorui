@@ -273,6 +273,17 @@
     });
     return res;
   }
+  // 「10月25日までに太田さんが見積書を出します」→「10/25｜太田｜見積書を出す」。期限の言い方：〇月〇日／〇/〇／来週／明日／月末／〇日 など。当てはまらなければ null
+  function parseTodo(l) {
+    var DUE = '(?:\\d{1,2}月\\d{1,2}日|\\d{1,2}\\/\\d{1,2}|来週(?:の?[月火水木金土日]曜日?)?|今週(?:中)?|明日|明後日|今月末|月末|来月(?:\\d{1,2}日)?|\\d{1,2}日)';
+    var m = String(l || '').match(new RegExp('^(' + DUE + ')(?:まで(?:に)?)、?(.+)$'));
+    if (!m) return null;
+    var due = m[1].replace(/^(\d{1,2})月(\d{1,2})日$/, '$1/$2');
+    var pm = m[2].match(/^(.+?)(?:さん|様)?(?:が|は|に|から)、?(.+?)。?$/);
+    if (!pm || pm[1].length > 8) return null;
+    var what = pm[2].replace(/出します$/, '出す').replace(/もらいます$/, 'もらう').replace(/お願いします$/, 'をお願いする').replace(/します$/, 'する').replace(/ます$/, '');
+    return due + '｜' + pm[1].trim() + '｜' + what;
+  }
   // 「まとまった議事録」の枠の文章を、きちんとした見出し（【出席者】…）の形に整える。
   //   すでに【見出し】が2つ以上あれば、そのまま。Copilotの返事（太字・表・番号つき見出し）は、見出しの形に直す
   function canonicalMinutes(t) {
@@ -285,7 +296,7 @@
     text = stripMarkdown(text);
     var byHead = summarizeByHeadings(text); if (byHead) return byHead;
     var out = { '出席者': '', '場所': '', '議題': [], '議事録メモ': [], '決定事項': [], 'ToDo': [], '次回予定': '' };
-    var FILLER = /^(えー+|あー+|えっと|あの+|その+|まあ|はい|ええ|うん|そうですね)[、。,\s]*/;
+    var FILLER = /^(?:(?:えー+(?:っと)?|あー+|えっと|えーと|あの+|その+|まあ|はい|ええ|うん|そうですね)[、。,\s]*)+/;
     String(text || '').replace(/\r/g, '').split(/\n|(?<=[。！？!?])/).forEach(function (raw) {
       var l = raw.replace(/^[\s・\-*●•‣]+/, '').replace(FILLER, '').trim();
       if (l.length < 2) return;
@@ -295,8 +306,8 @@
       // 話すときに、見出しの言葉を言った場合（「出席者は、太田さんと國井さんです」「決まったことは、…」「宿題は、…」など）
       if ((m = l.match(/^(出席者|参加者|メンバー)(?:は|：|:)、?\s*(.+)$/))) { out['出席者'] = m[2].replace(/(?:です|でした)。?$/, '').replace(/。$/, '').replace(/(さん|様|氏)/g, '').split(/[、,，]|と/).map(function (x) { x = x.trim(); var w = x.match(/^(.+?)の(.+)$/); if (w) x = w[2] + '（' + w[1] + '）'; return x; }).filter(Boolean).join('、'); return; }
       if ((m = l.match(/^(?:場所|会場)(?:は|：|:)、?\s*(.+?)(?:です|でした)?。?$/)) && !out['場所']) { out['場所'] = m[1].trim(); return; }
-      if ((m = l.match(/^(?:議題|テーマ|話題)(?:は|：|:)、?\s*(.+)$/))) { m[1].replace(/(?:です|でした)。?$/, '').replace(/。$/, '').split(/、/).forEach(function (x) { x = x.trim(); if (x) out['議題'].push(x); }); return; }
-      if ((m = l.match(/^(?:宿題|やること|アクション(?:アイテム)?|ToDo|TODO|タスク)(?:は|：|:)、?\s*(.+)$/))) { m[1].replace(/。$/, '').split(/、/).forEach(function (x) { x = x.trim(); if (x) out['ToDo'].push(x); }); return; }
+      if ((m = l.match(/^(?:(?:本日|今日|今回)の)?(?:議題|テーマ|話題)(?:は|：|:)、?\s*(.+)$/))) { m[1].replace(/(?:です|でした)。?$/, '').replace(/。$/, '').split(/、/).forEach(function (x) { x = x.trim(); if (x) out['議題'].push(x); }); return; }
+      if ((m = l.match(/^(?:宿題|やること|アクション(?:アイテム)?|ToDo|TODO|タスク)(?:は|：|:)、?\s*(.+)$/))) { var td0 = parseTodo(m[1]); if (td0) { out['ToDo'].push(td0); return; } m[1].replace(/。$/, '').split(/、/).forEach(function (x) { x = x.trim(); if (x) out['ToDo'].push(x); }); return; }
       // 出席・場所の言い回し：「今日は現場事務所で、A、B、元請のCが出席して…」「本日はオンラインで、AさんとBさんが参加しました」
       if ((m = l.match(/^(?:今日は|本日は|今回は)?(?:(.+?)で、)?(.+?)(?:が|は)?(?:出席|参加)(?:して|しました|でした|です|者)/)) && /[、とと]|さん|様|氏/.test(m[2])) {
         if (m[1] && !out['場所']) out['場所'] = m[1].trim();
@@ -309,21 +320,35 @@
       // 担当の言い回し（期限なし）：「藤原さんは、〇〇をお願いします」「鈴木さんには、〇〇をお願いします」
       if ((m = l.match(/^([一-龥々ァ-ヶー]{2,5})(?:さん|様)(?:は|には|に|から)、?(.+?)(?:を)?(?:お願いします|お願いしました|お願いしたい|してもらいます|していただきます|担当します|担当してもらいます)/))) { out['ToDo'].push('｜' + m[1] + '｜' + m[2].replace(/を$/, '')); return; }
       // 決定の言い回し：「〜ことになりました」「〜ということで合意しました」「〜で決まりました」「〜にします」
-      if (/(ことになりました|ことにしました|ということで(?:合意|了解|決定|確定)|で(?:合意|了解)しました|に(?:決まり|決定)しました|にします。?$|とします。?$)/.test(l) && !/(お願い|してください)/.test(l)) { out['決定事項'].push(l.replace(/。$/, '')); return; }
+      if (/(ことになりました|ことにしました|ということで(?:合意|了解|決定|確定)|で(?:合意|了解)しました|に(?:決まり|決定)しました|で(?:決定|確定)(?:しました|です)|で進めます|でいきます|で行きます|を採用(?:します|しました)|にします。?$|とします。?$)/.test(l) && !/(お願い|してください)/.test(l)) { out['決定事項'].push(l.replace(/。$/, '')); return; }
       // ふつうに話した言い回し（「〇〇で、△△さんと□□で行いました」「10月25日までに太田さんが…します」など）
       if ((m = l.match(/(?:打合せ|打ち合わせ|会議|ミーティング)は、?(.+?)で、?(.+?)で(?:行い|開き|実施|おこない)/))) {
         if (!out['場所']) out['場所'] = m[1].trim();
         if (!out['出席者']) out['出席者'] = m[2].split(/[、,，と]/).map(function (x) { x = x.trim(); var w = x.match(/^(.+?)の(.+)$/); if (w) x = w[2] + '（' + w[1] + '）'; return x.replace(/(さん|様|氏)(?=（|$)/, ''); }).filter(Boolean).join('、');
         return;
       }
-      if ((m = l.match(/^(\d{1,2})月(\d{1,2})日(?:まで(?:に)?)、?(.+?)(?:さん|様)?が、?(.+?)。?$/))) {
-        var what = m[4].replace(/出します$/, '出す').replace(/もらいます$/, 'もらう').replace(/します$/, 'する').replace(/ます$/, '');
-        out['ToDo'].push(m[1] + '/' + m[2] + '｜' + m[3].trim() + '｜' + what); return;
+      var td = parseTodo(l); if (td) { out['ToDo'].push(td); return; }
+      // 決定の言い回し：「〜ことになりました」「〜ということで合意しました」「〜で決まりました」「〜にします」
+      if (/(ことになりました|ことにしました|ということで(?:合意|了解|決定|確定)|で(?:合意|了解)しました|に(?:決まり|決定)しました|で(?:決定|確定)(?:しました|です)|で進めます|でいきます|で行きます|を採用(?:します|しました)|にします。?$|とします。?$)/.test(l) && !/(お願い|してください)/.test(l)) { out['決定事項'].push(l.replace(/。$/, '')); return; }
+      // ふつうに話した言い回し（「〇〇で、△△さんと□□で行いました」「10月25日までに太田さんが…します」など）
+      if ((m = l.match(/(?:打合せ|打ち合わせ|会議|ミーティング)は、?(.+?)で、?(.+?)で(?:行い|開き|実施|おこない)/))) {
+        if (!out['場所']) out['場所'] = m[1].trim();
+        if (!out['出席者']) out['出席者'] = m[2].split(/[、,，と]/).map(function (x) { x = x.trim(); var w = x.match(/^(.+?)の(.+)$/); if (w) x = w[2] + '（' + w[1] + '）'; return x.replace(/(さん|様|氏)(?=（|$)/, ''); }).filter(Boolean).join('、');
+        return;
+      }
+      if ((m = l.match(/^(\d{1,2})月(\d{1,2})日|^(\d{1,2})\/(\d{1,2})|^(来週(?:の?[月火水木金土日]曜日?)?|今週(?:中)?|明日|明後日|今月末|月末|来月(?:\d{1,2}日)?|\d{1,2}日)/)) && /^(?:[^、。]{0,12})?(?:まで(?:に)?)/.test(l.replace(/^\d{1,2}月\d{1,2}日|^\d{1,2}\/\d{1,2}|^来週(?:の?[月火水木金土日]曜日?)?|^今週(?:中)?|^明日|^明後日|^今月末|^月末|^来月(?:\d{1,2}日)?|^\d{1,2}日/, ''))) {
+        var due = m[1] ? m[1] + '/' + m[2] : m[3] ? m[3] + '/' + m[4] : m[5];
+        var rest = l.replace(/^(?:\d{1,2}月\d{1,2}日|\d{1,2}\/\d{1,2}|来週(?:の?[月火水木金土日]曜日?)?|今週(?:中)?|明日|明後日|今月末|月末|来月(?:\d{1,2}日)?|\d{1,2}日)(?:まで(?:に)?)、?/, '');
+        var pm = rest.match(/^(.+?)(?:さん|様)?(?:が|は|に|から)、?(.+?)。?$/);
+        if (pm && pm[1].length <= 8) {
+          var what = pm[2].replace(/出します$/, '出す').replace(/もらいます$/, 'もらう').replace(/お願いします$/, 'をお願いする').replace(/します$/, 'する').replace(/ます$/, '');
+          out['ToDo'].push(due + '｜' + pm[1].trim() + '｜' + what); return;
+        }
       }
       if ((m = l.match(/^(?:決まったこと|決まったの|決定事項|決定)(?:は|として|[:：])、?\s*(.+)$/))) {
         m[1].replace(/。$/, '').replace(/です$/, '').split('、').forEach(function (x) { x = x.trim(); if (x) out['決定事項'].push(x); }); return;
       }
-      if ((m = l.match(/^次回(?:の打合せ|予定)?(?:は|：|:)?、?\s*(.+)$/)) && !out['次回予定']) { out['次回予定'] = m[1].replace(/です。?$/, '').replace(/。$/, ''); return; }
+      if ((m = l.match(/^(?:次回|次の)(?:の打合せ|の打ち合わせ|の会議|予定)?(?:は|：|:)?、?\s*(.+)$/)) && !out['次回予定']) { out['次回予定'] = m[1].replace(/です。?$/, '').replace(/。$/, ''); return; }
       if ((m = l.match(/^(?:まず|次に|それから|続いて|最後に)、?(.+?)(?:ですが|については|について|なんですが)、?/))) {
         out['議題'].push(m[1].trim());
         var rest = l.slice(m[0].length).replace(/。$/, '').trim(); if (rest.length > 1) out['議事録メモ'].push(rest);
@@ -690,9 +715,9 @@
     }).then(function () { return { who: who, at: now }; });
   }
   // PDF化：承認済みの書類を、PDF化サーバー（pdf-server/）で変換して、同じ行の「PDF」に保存する
-  function convertToPdf(ctx, name, ex) {
+  function convertToPdf(ctx, name, ex, force) {   // force：議事録を保存するときの、自動のPDF化（承認は、待たない）
     if (!PDF_SERVER_URL) return Promise.reject(new Error('PDF化サーバーが、まだ設定されていません（doc-button.js の PDF_SERVER_URL）'));
-    if (!ex.approved) return Promise.reject(new Error('承認されていない書類は、PDF化しません'));
+    if (!ex.approved && !force) return Promise.reject(new Error('承認されていない書類は、PDF化しません'));
     var ext = extOf((ex.file && ex.file.name) || ex.filename || '');
     return (ex.data ? Promise.resolve(ex.data) : download(ex.file.fileKey)).then(function (buf) {
       return fetch(PDF_SERVER_URL.replace(/\/$/, '') + '/convert?ext=' + encodeURIComponent(ext), { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: buf });
@@ -990,7 +1015,17 @@
           (asks.length ? askValues(asks, name) : Promise.resolve({})).then(function (extra) {
             if (!extra) return;
             btn.disabled = true; setMsg('作成しています…', false);
-            return makeOne(rec, extra).then(function (r) { saveAs(r.data, r.filename); reloadSoon((isMobile ? '保存しました：' : '保存してダウンロードしました：') + r.filename + unknownNote(r.unknown, r.empty), !!((r.unknown && r.unknown.length) || (r.empty && r.empty.length))); })
+            return makeOne(rec, extra).then(function (r) {
+              saveAs(r.data, r.filename);
+              var stay = !!((r.unknown && r.unknown.length) || (r.empty && r.empty.length));
+              var base = (isMobile ? '保存しました：' : '保存してダウンロードしました：') + r.filename + unknownNote(r.unknown, r.empty);
+              // 議事録は、保存と同時に、PDFも、案件に自動で保存する（承認は、待たない）
+              var minutesDoc = asks.some(function (a) { return a.key === '議事録本文' || a.key === '議事録メモ'; });
+              if (!(minutesDoc && PDF_SERVER_URL && ctx.caps && ctx.caps.pdf)) { reloadSoon(base, stay); return; }
+              setMsg('保存しました。PDFを作っています…（数秒〜十数秒かかります）', false);
+              return convertToPdf(ctx, name, existing[name], true).then(function () { reloadSoon(base + '\nPDFも保存しました', stay); },
+                function (e) { reloadSoon(base + '\n（PDFは、保存できませんでした：' + ((e && e.message) || '') + '。議事録は、保存できています。承認したあと、「PDF化」で、作れます）', true); });
+            })
               .catch(function (e) { btn.disabled = false; setMsg((e && e.message) || '作成できませんでした', true); });
           });
         });

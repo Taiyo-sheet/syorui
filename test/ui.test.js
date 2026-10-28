@@ -750,7 +750,7 @@ test('画面：議事録に、音声の文字起こしを貼り付けると、�
     assert.strictEqual(await page.locator('[data-ask="出席者"]').inputValue(), '太田、國井');
     assert.strictEqual(await page.locator('[data-ask="場所"]').inputValue(), '現場事務所');
     assert.match(await page.locator('[data-ask="決定事項"]').inputValue(), /夜間規制/);
-    assert.match(await page.locator('[data-ask="ToDo"]').inputValue(), /来週までに太田さん/);
+    assert.match(await page.locator('[data-ask="ToDo"]').inputValue(), /来週｜太田｜見積書を送付する/);
     assert.match(await page.locator('[data-ask="次回予定"]').inputValue(), /11月1日/);
     assert.strictEqual(sent.length, 0, 'かんたん整理は、外部に何も送らない');
     // AI（サーバー設定あり）
