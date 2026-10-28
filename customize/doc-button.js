@@ -284,6 +284,24 @@
     var what = pm[2].replace(/出します$/, '出す').replace(/もらいます$/, 'もらう').replace(/お願いします$/, 'をお願いする').replace(/します$/, 'する').replace(/ます$/, '');
     return due + '｜' + pm[1].trim() + '｜' + what;
   }
+  // 仕分け画面の部品：整理の結果（項目ごとの文章）を、1行ずつの「項目＋文」の並びにする／並びを、項目ごとの文章に戻す
+  var SORT_CATS = [['出席者', '出席者'], ['場所', '場所'], ['議題', '議題'], ['議事録メモ', '打合せ内容'], ['決定事項', '決定事項'], ['ToDo', 'ToDo'], ['次回予定', '次回予定']];
+  function sortItemsOf(res) {
+    var items = [];
+    SORT_CATS.forEach(function (c) {
+      var v = String((res && res[c[0]]) || '').trim(); if (!v || v === 'なし' || v === '不明') return;
+      var parts = c[0] === '出席者' ? v.split(/[、,，]/) : c[0] === '場所' || c[0] === '次回予定' ? [v] : v.split('\n');
+      parts.forEach(function (t) { t = t.replace(/^[\s・\-*●•‣]+/, '').trim(); if (t) items.push({ cat: c[0], text: t }); });
+    });
+    return items;
+  }
+  function sortResOf(items) {
+    var by = {}; SORT_CATS.forEach(function (c) { by[c[0]] = []; });
+    items.forEach(function (it) { var t = String(it.text || '').trim(); if (it.cat && t && by[it.cat]) by[it.cat].push(t); });
+    var out = {};
+    SORT_CATS.forEach(function (c) { out[c[0]] = (c[0] === '出席者' || c[0] === '場所' || c[0] === '次回予定') ? by[c[0]].join('、') : by[c[0]].join('\n'); });
+    return out;
+  }
   // 「まとまった議事録」の枠の文章を、きちんとした見出し（【出席者】…）の形に整える。
   //   すでに【見出し】が2つ以上あれば、そのまま。Copilotの返事（太字・表・番号つき見出し）は、見出しの形に直す
   function canonicalMinutes(t) {
@@ -869,11 +887,34 @@
           var card = el('div', 'background:#fff;max-width:640px;margin:24px auto;border-radius:8px;padding:16px;font-size:14px;box-sizing:border-box;width:calc(100% - 24px)');
           card.appendChild(el('div', 'font-weight:bold;font-size:16px;margin-bottom:10px', '「' + name + '」の内容'));
           var inputs = {};
+          var sortBox = el('div', 'margin:6px 0 8px;display:none');   // 仕分け画面（まちがいを、1行ずつ、直す）
+          sortBox.setAttribute('data-sort', '1');
           var single = asks.some(function (a) { return a.key === '議事録本文'; });   // 議事録本文：ひとつの四角に、見出し付きで、まとめて入れる
           var isMinutes = single || asks.some(function (a) { return a.key === '議事録メモ'; });
           var shown = single ? asks.filter(function (a) { return a.key === '議事録本文'; }) : asks;   // 打合せ日・作成者などは、入力欄を出さず、自動で入れる
+          // 仕分け画面：整理の結果を、1行ずつ出す。行ごとに、項目を選び直す・文を直す・消す（直すと、③に反映される）
+          function renderSort(res) {
+            var items = sortItemsOf(res);
+            sortBox.textContent = '';
+            if (!inputs['議事録本文'] || !items.length) { sortBox.style.display = 'none'; return; }
+            sortBox.style.display = 'block';
+            sortBox.appendChild(el('div', 'font-size:14px;font-weight:bold;color:#1f3a6e;margin-bottom:4px', '仕分け（まちがいは、1行ずつ、ここで直せます）'));
+            sortBox.appendChild(el('div', 'font-size:12px;color:#666;margin-bottom:6px', '左の選択で、項目を変えられます。文は、そのまま、直せます。直すと、下の③に反映されます。'));
+            var sync = function () { inputs['議事録本文'].value = formatMinutes(sortResOf(items)); };
+            items.forEach(function (it, i) {
+              var row = el('div', 'display:flex;gap:6px;align-items:center;margin:3px 0'); row.setAttribute('data-sort-row', String(i));
+              var sel = el('select', 'font-size:' + (isMobile ? '15px' : '13px') + ';padding:' + (isMobile ? '8px 4px' : '4px 2px') + ';flex:0 0 auto;max-width:34%');
+              SORT_CATS.forEach(function (c) { var o = document.createElement('option'); o.value = c[0]; o.textContent = c[1]; if (c[0] === it.cat) o.selected = true; sel.appendChild(o); });
+              sel.addEventListener('change', function () { it.cat = sel.value; sync(); });
+              var inp = el('input', 'flex:1 1 auto;min-width:0;font-size:' + (isMobile ? '15px' : '13px') + ';padding:' + (isMobile ? '8px' : '4px') + ';box-sizing:border-box'); inp.type = 'text'; inp.value = it.text;
+              inp.addEventListener('input', function () { it.text = inp.value; sync(); });
+              var del = el('button', 'flex:0 0 auto;padding:' + (isMobile ? '8px 10px' : '3px 8px') + ';cursor:pointer;font-size:12px', '消す'); del.type = 'button';
+              del.addEventListener('click', function () { it.text = ''; row.parentNode.removeChild(row); sync(); });
+              row.appendChild(sel); row.appendChild(inp); row.appendChild(del); sortBox.appendChild(row);
+            });
+          }
           var fillFrom = function (res) {
-            if (inputs['議事録本文']) { inputs['議事録本文'].value = formatMinutes(res); return; }
+            if (inputs['議事録本文']) { inputs['議事録本文'].value = formatMinutes(res); renderSort(res); return; }
             Object.keys(res).forEach(function (key) { if (inputs[key] && res[key]) inputs[key].value = res[key]; });
           };
           if (isMinutes) {
@@ -926,7 +967,13 @@
                 .then(function (res) { Object.keys(res).forEach(function (k) { res[k] = mk.unmask(res[k]); }); fillFrom(res); ai.disabled = false; note.textContent = 'AIが分けました（置き換えた言葉 ' + mk.count + ' 個は、元に戻しました）。内容を、確認・修正してください（AIの案です。間違いが、含まれる可能性があります）。'; })
                 .catch(function (e) { ai.disabled = false; note.style.color = '#c0392b'; note.textContent = (e && e.message) || 'AIの整理に失敗しました'; });
             });
+            if (single) {   // Copilotなどの返事を、③に貼ったあとでも、仕分け画面で、1行ずつ直せる
+              var resort = el('button', 'padding:' + (isMobile ? '10px 12px' : '6px 10px') + ';font-size:' + (isMobile ? '14px' : '12px') + ';cursor:pointer', '③を、仕分けで直す'); resort.type = 'button'; resort.setAttribute('data-resort', '1');
+              resort.addEventListener('click', function () { var v = inputs['議事録本文'] && inputs['議事録本文'].value; if (!v || !v.trim()) { note.style.color = '#c0392b'; note.textContent = '③の枠が、空です'; return; } renderSort(summarizeByHeadings(v) || summarizeLocal(v)); note.style.color = '#1f7a3d'; note.textContent = '③の内容を、仕分けに出しました'; });
+              tools.appendChild(resort);
+            }
             tools.appendChild(easy); tools.appendChild(ai); tools.appendChild(note); card.appendChild(tools);
+            card.appendChild(sortBox);
           }
           shown.forEach(function (a) {
             card.appendChild(el('div', a.key === '議事録本文' ? 'font-size:14px;font-weight:bold;color:#1f3a6e;margin-top:8px' : 'font-size:12px;color:#666;margin-top:8px', a.label));
