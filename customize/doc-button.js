@@ -892,35 +892,55 @@
           var single = asks.some(function (a) { return a.key === '議事録本文'; });   // 議事録本文：ひとつの四角に、見出し付きで、まとめて入れる
           var isMinutes = single || asks.some(function (a) { return a.key === '議事録メモ'; });
           var shown = single ? asks.filter(function (a) { return a.key === '議事録本文'; }) : asks;   // 打合せ日・作成者などは、入力欄を出さず、自動で入れる
-          // 仕分け画面：整理の結果を、1行ずつ出す。行ごとに、項目を選び直す・文を直す・消す（直すと、③に反映される）
-          function renderSort(res) {
-            var items = sortItemsOf(res);
-            sortBox.textContent = '';
-            if (!inputs['議事録本文'] || !items.length) { sortBox.style.display = 'none'; return; }
-            sortBox.style.display = 'block';
-            sortBox.appendChild(el('div', 'font-size:' + (isMobile ? '16px' : '14px') + ';font-weight:bold;color:#1f3a6e;margin-bottom:2px', '仕分け（まちがいは、ここで直せます）'));
-            sortBox.appendChild(el('div', 'font-size:12px;color:#666;margin-bottom:6px', '上の色つきの選択で、項目を変えられます。文は、そのまま直せます。直すと、下の③に反映されます。'));
-            var sync = function () { inputs['議事録本文'].value = formatMinutes(sortResOf(items)); };
-            var COLORS = { '出席者': '#2f6fb5', '場所': '#1f8a8a', '議題': '#7a4fb3', '議事録メモ': '#6b7280', '決定事項': '#2e8b57', 'ToDo': '#d9822b', '次回予定': '#a0642d' };
-            items.forEach(function (it, i) {
-              // 1件ずつの「カード」：項目は色つきの帯、文は、全部が見える枠（長い文も、途中で切れない）
-              var col = COLORS[it.cat] || '#6b7280';
-              var row = el('div', 'margin:8px 0;padding:8px;border:1px solid #d9dee5;border-left:6px solid ' + col + ';border-radius:6px;background:#fff'); row.setAttribute('data-sort-row', String(i));
-              var top = el('div', 'display:flex;gap:8px;align-items:center;margin-bottom:6px');
-              var sel = el('select', 'flex:1 1 auto;font-size:' + (isMobile ? '16px' : '14px') + ';font-weight:bold;padding:' + (isMobile ? '10px 6px' : '5px 4px') + ';border:2px solid ' + col + ';border-radius:4px;background:#fff;color:#222');
-              SORT_CATS.forEach(function (c) { var o = document.createElement('option'); o.value = c[0]; o.textContent = c[1]; if (c[0] === it.cat) o.selected = true; sel.appendChild(o); });
-              sel.addEventListener('change', function () { it.cat = sel.value; var c2 = COLORS[it.cat] || '#6b7280'; row.style.borderLeftColor = c2; sel.style.borderColor = c2; sync(); });
-              var del = el('button', 'flex:0 0 auto;padding:' + (isMobile ? '10px 16px' : '5px 12px') + ';cursor:pointer;font-size:' + (isMobile ? '15px' : '13px') + ';border:1px solid #c0c7d0;border-radius:4px;background:#f6f7f9', '消す'); del.type = 'button';
-              del.addEventListener('click', function () { it.text = ''; row.parentNode.removeChild(row); sync(); });
-              top.appendChild(sel); top.appendChild(del);
-              var ta = el('textarea', 'width:100%;box-sizing:border-box;font-size:' + (isMobile ? '16px' : '14px') + ';line-height:1.6;padding:8px;border:1px solid #c9d0d9;border-radius:4px;resize:vertical;overflow:hidden;min-height:42px'); ta.rows = 1; ta.value = it.text;
-              var fit = function () { ta.style.height = 'auto'; ta.style.height = Math.max(42, ta.scrollHeight + 2) + 'px'; };
-              ta.addEventListener('input', function () { it.text = ta.value; fit(); sync(); });
-              row.appendChild(top); row.appendChild(ta); sortBox.appendChild(row);
-              setTimeout(fit, 0);
+          // 仕分け画面：整理の結果を、項目ごとにまとめて出す（色つきのカード）。直したい行を、タップすると、項目の移動・文の修正・削除ができる
+          var sortItems = [];
+          var COLORS = { '出席者': '#2f6fb5', '場所': '#1f8a8a', '議題': '#7a4fb3', '議事録メモ': '#6b7280', '決定事項': '#2e8b57', 'ToDo': '#d9822b', '次回予定': '#a0642d' };
+          var sortSync = function () { inputs['議事録本文'].value = formatMinutes(sortResOf(sortItems)); };
+          function openSortSheet(it) {
+            var cover = el('div', 'position:fixed;left:0;top:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:10003;overflow:auto'); cover.setAttribute('data-sort-sheet', '1');
+            var sheet = el('div', 'background:#fff;margin:24px 12px;border-radius:8px;padding:14px;max-width:560px;box-sizing:border-box;margin-left:auto;margin-right:auto;width:calc(100% - 24px)');
+            sheet.appendChild(el('div', 'font-weight:bold;font-size:' + (isMobile ? '16px' : '15px') + ';margin-bottom:6px', '文を直す'));
+            var ta = el('textarea', 'width:100%;box-sizing:border-box;font-size:' + (isMobile ? '17px' : '15px') + ';line-height:1.6;padding:8px;border:1px solid #c9d0d9;border-radius:4px;min-height:84px'); ta.value = it.text; ta.setAttribute('data-sort-text', '1'); sheet.appendChild(ta);
+            sheet.appendChild(el('div', 'font-weight:bold;font-size:' + (isMobile ? '16px' : '15px') + ';margin:12px 0 6px', 'どの項目に入れますか'));
+            var grid = el('div', 'display:flex;flex-wrap:wrap;gap:8px');
+            var done = function () { it.text = ta.value; document.body.removeChild(cover); sortSync(); drawSort(false); };
+            SORT_CATS.forEach(function (c) {
+              var on = c[0] === it.cat, col = COLORS[c[0]];
+              var b = el('button', 'padding:' + (isMobile ? '12px 14px' : '8px 12px') + ';font-size:' + (isMobile ? '16px' : '14px') + ';font-weight:bold;cursor:pointer;border-radius:6px;border:2px solid ' + col + ';' + (on ? 'background:' + col + ';color:#fff' : 'background:#fff;color:' + col), c[1]); b.type = 'button'; b.setAttribute('data-sort-cat', c[0]);
+              b.addEventListener('click', function () { it.cat = c[0]; done(); });
+              grid.appendChild(b);
             });
-            if (sortBox.scrollIntoView) setTimeout(function () { try { sortBox.scrollIntoView({ block: 'start', behavior: 'smooth' }); } catch (e) {} }, 50);   // 整理したら、仕分けの場所へ、画面を動かす
+            sheet.appendChild(grid);
+            var bar = el('div', 'display:flex;gap:10px;justify-content:space-between;margin-top:16px');
+            var del = el('button', 'padding:' + (isMobile ? '12px 16px' : '8px 14px') + ';font-size:' + (isMobile ? '16px' : '14px') + ';cursor:pointer;border:1px solid #c0392b;color:#c0392b;background:#fff;border-radius:6px', 'この行を消す'); del.type = 'button'; del.setAttribute('data-sort-del', '1');
+            del.addEventListener('click', function () { ta.value = ''; done(); });
+            var ok = el('button', 'padding:' + (isMobile ? '12px 24px' : '8px 20px') + ';font-size:' + (isMobile ? '16px' : '14px') + ';font-weight:bold;cursor:pointer;border:0;background:#0b5fb8;color:#fff;border-radius:6px', '決定'); ok.type = 'button'; ok.setAttribute('data-sort-ok', '1');
+            ok.addEventListener('click', done);
+            bar.appendChild(del); bar.appendChild(ok); sheet.appendChild(bar); cover.appendChild(sheet); document.body.appendChild(cover);
           }
+          function drawSort(scroll) {
+            sortBox.textContent = '';
+            var live = sortItems.filter(function (it) { return it.text.trim(); });
+            if (!inputs['議事録本文'] || !live.length) { sortBox.style.display = 'none'; return; }
+            sortBox.style.display = 'block';
+            sortBox.appendChild(el('div', 'font-size:' + (isMobile ? '17px' : '15px') + ';font-weight:bold;color:#1f3a6e;margin-bottom:2px', '仕分け（直したい行を、タップ）'));
+            sortBox.appendChild(el('div', 'font-size:' + (isMobile ? '14px' : '12px') + ';color:#555;margin-bottom:6px', '項目の移動・文の直し・削除ができます。直すと、下の③に反映されます。'));
+            SORT_CATS.forEach(function (c) {
+              var list = live.filter(function (it) { return it.cat === c[0]; }); if (!list.length) return;
+              var card = el('div', 'margin:8px 0;border:1px solid #d9dee5;border-left:6px solid ' + COLORS[c[0]] + ';border-radius:6px;background:#fff');
+              card.appendChild(el('div', 'padding:6px 10px;font-weight:bold;font-size:' + (isMobile ? '16px' : '14px') + ';color:' + COLORS[c[0]], c[1]));
+              list.forEach(function (it) {
+                var line = el('div', 'display:flex;gap:8px;align-items:center;padding:' + (isMobile ? '12px 10px' : '8px 10px') + ';border-top:1px solid #eef0f3;font-size:' + (isMobile ? '17px' : '15px') + ';line-height:1.6;cursor:pointer;word-break:break-all');
+                line.setAttribute('data-sort-row', String(sortItems.indexOf(it)));
+                line.appendChild(el('div', 'flex:1 1 auto', it.text)); line.appendChild(el('div', 'flex:0 0 auto;color:#999;font-size:20px', '›'));
+                line.addEventListener('click', function () { openSortSheet(it); });
+                card.appendChild(line);
+              });
+              sortBox.appendChild(card);
+            });
+            if (scroll && sortBox.scrollIntoView) setTimeout(function () { try { sortBox.scrollIntoView({ block: 'start', behavior: 'smooth' }); } catch (e) {} }, 50);   // 整理したら、仕分けの場所へ、画面を動かす
+          }
+          function renderSort(res) { sortItems = sortItemsOf(res); drawSort(true); }
           var fillFrom = function (res) {
             if (inputs['議事録本文']) { inputs['議事録本文'].value = formatMinutes(res); renderSort(res); return; }
             Object.keys(res).forEach(function (key) { if (inputs[key] && res[key]) inputs[key].value = res[key]; });

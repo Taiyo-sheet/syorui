@@ -914,23 +914,24 @@ test('画面：仕分け画面（1行ずつ、項目を選び直す・消す→�
     await page.locator('[data-minutes-src]').fill('出席者は、太田さんと國井さんです。\n議題は、夜間規制の時間です。\n決まったことは、規制は9時から17時です。\n10月25日までに太田さんが見積書を出します。\n次回は、11月1日です。');
     await page.getByRole('button', { name: 'かんたん整理（外部に送りません）' }).click();
     await page.locator('[data-sort-row]').first().waitFor();
-    const idx = (t) => page.locator('[data-sort-row] textarea').evaluateAll((els, w) => els.findIndex((e) => e.value === w), t);
     const box = () => page.locator('[data-ask="議事録本文"]').inputValue();
-    assert.ok((await page.locator('[data-sort-row]').count()) >= 5, 'カードが、1件ずつ出る');
-    // 議題の「夜間規制の時間」を、決定事項に動かす → ③に反映
-    await page.locator('[data-sort-row]').nth(await idx('夜間規制の時間')).locator('select').selectOption('決定事項');
+    const row = (w) => page.locator('[data-sort-row]', { hasText: w }).first();
+    assert.ok((await page.locator('[data-sort-row]').count()) >= 5, '項目ごとのカードに、行が出る');
+    // 議題の「夜間規制の時間」を、タップ → 決定事項に動かす → ③に反映
+    await row('夜間規制の時間').click(); await page.locator('[data-sort-sheet]').waitFor();
+    await page.locator('[data-sort-cat="決定事項"]').click();
     assert.match(await box(), /【議題】\nなし/); assert.match(await box(), /【決定事項】\n[\s\S]*夜間規制の時間/);
     // 文を直す → ③に反映
-    await page.locator('[data-sort-row]').nth(await idx('太田、國井')).locator('textarea').fill('太田（TS）、國井');
+    await row('太田、國井').click(); await page.locator('[data-sort-text]').fill('太田（TS）、國井'); await page.locator('[data-sort-ok]').click();
     assert.match(await box(), /【出席者】\n太田（TS）、國井/);
     // 消す → ③から無くなる
-    await page.locator('[data-sort-row]').nth(await idx('規制は9時から17時')).getByRole('button', { name: '消す' }).click();
+    await row('規制は9時から17時').click(); await page.locator('[data-sort-del]').click();
     assert.doesNotMatch(await box(), /規制は9時から17時/);
     // ③に、Copilotなどの返事を貼ったあとでも、「③を、仕分けで直す」で、1行ずつ直せる
     await page.locator('[data-ask="議事録本文"]').fill('**出席者**\n- 山田\n**場所**\nオンライン');
     await page.getByRole('button', { name: '③を、仕分けで直す' }).click();
     await page.locator('[data-sort-row]').first().waitFor();
-    assert.strictEqual(await idx('山田') >= 0, true); assert.strictEqual(await idx('オンライン') >= 0, true);
+    assert.ok((await page.locator('[data-sort-row]', { hasText: '山田' }).count()) === 1 && (await page.locator('[data-sort-row]', { hasText: 'オンライン' }).count()) === 1);
     assert.deepStrictEqual(errors, []);
   } finally { await browser.close(); await mock.close(); }
 });
