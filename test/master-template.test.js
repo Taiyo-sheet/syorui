@@ -232,22 +232,28 @@ test('書類マスタ：「雛形の状況」の一覧（雛形の有無・案�
     const mk = (n, st, f, aud, use) => mock.addRecord('10', { 書類名: { value: n }, 工程: { value: st }, 表示順: { value: '1' }, 使用状況: { value: use || '使用中' }, 見られる立場: { value: aud || [] }, 雛形: { value: f } });
     mk('良い書類', '打合せ', [{ fileKey: good, name: 'good.docx' }], ['施工店']); mk('打ち間違いの書類', '打合せ', [{ fileKey: typo, name: 'typo.docx' }], ['施工店', '工事部']); mk('雛形のない書類', '竣工', [], ['工事部']); mk('古い書類', '竣工', [], ['施工店'], '廃止');
     const { page, errors } = await setup(mock, url, browser);
-    await page.evaluate(() => window.__fire('app.record.index.show', {}));   // 最初から、開いている
-    await page.getByText(/書類 3 件　雛形あり 2 件　雛形なし 1 件/).waitFor();   // 廃止の書類は、ふだんは、数えない
+    await page.evaluate(() => window.__fire('app.record.index.show', {}));   // 最初から、開いている。最初は「雛形が必要なもの」だけ出す
+    await page.getByText(/すべての立場：書類 3 件のうち、雛形が必要（まだ入っていない）なもの 1 件　／　入っているもの 2 件/).waitFor();
+    let t0 = await page.locator('[data-master-dash]').textContent();
+    assert.match(t0, /雛形のない書類/); assert.doesNotMatch(t0, /良い書類/, '最初は、足りないものだけ');
+    // プルダウンで、すべて（使用中）を選ぶ
+    await page.locator('[data-mode-select]').selectOption('all');
+    await page.getByText(/いま表示：3 件/).waitFor();
     const t = await page.locator('[data-master-dash]').textContent();
     assert.match(t, /良い書類.*good\.docx.*2.*2026-10-20/); assert.match(t, /雛形のない書類.*未登録/);
-    // 立場のボタンで、絞り込める（廃止は、ふだんは出ない）
-    await page.locator('[data-aud="工事部"]').click();
-    await page.getByText(/工事部用の書類 2 件　雛形あり 1 件　雛形なし 1 件/).waitFor();
-    await page.locator('[data-aud="施工店"]').click();
-    await page.getByText(/施工店用の書類 2 件/).waitFor();
-    await page.locator('[data-filter-old]').click();
-    await page.getByText(/施工店用の書類 3 件/).waitFor();
+    // 立場を、プルダウンで選ぶ（工事部用：2件のうち、雛形が必要なもの1件）
+    await page.locator('[data-aud-select]').selectOption('工事部');
+    await page.getByText(/工事部用：書類 2 件のうち、雛形が必要（まだ入っていない）なもの 1 件　／　入っているもの 1 件　（いま表示：2 件）/).waitFor();
+    await page.locator('[data-mode-select]').selectOption('need');
+    await page.getByText(/いま表示：1 件/).waitFor();
+    assert.doesNotMatch(await page.locator('[data-master-dash]').textContent(), /打ち間違いの書類/);
+    // 廃止した書類
+    await page.locator('[data-aud-select]').selectOption('施工店'); await page.locator('[data-mode-select]').selectOption('old');
+    await page.getByText(/いま表示：1 件/).waitFor();
     assert.match(await page.locator('[data-master-dash]').textContent(), /古い書類（廃止）/);
-    await page.locator('[data-filter-old]').click();
-    await page.locator('[data-filter-file]').click();
-    await page.getByText(/施工店用の書類 2 件　雛形あり 2 件　雛形なし 0 件/).waitFor();
-    await page.locator('[data-filter-file]').click(); await page.locator('[data-aud="all"]').click();
+    // 雛形が入っているもの（施工店用）：2件。全点検
+    await page.locator('[data-mode-select]').selectOption('have');
+    await page.getByText(/いま表示：2 件/).waitFor();
     await page.locator('[data-master-check-all]').click();
     await page.getByText(/2件を点検：注意 1 件/).waitFor();
     const t2 = await page.locator('[data-master-dash]').textContent();

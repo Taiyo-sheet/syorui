@@ -409,35 +409,49 @@ window.__TS_DOC_ENGINE_ONLY = true;
       ]).then(function (rs) {
         var recs = rs[0].records, uc = rs[1];
         body.textContent = '';
-        var state = { aud: '', old: false, withFile: false };
-        var AUDS = [['', 'すべて'], ['施工店', '施工店用'], ['工事部', '工事部用'], ['施工指導', '施工指導用'], ['外部パートナー', '外部パートナー用'], ['TS計画推進', 'TS計画推進']];
-        var chipBar = el('div', 'display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px;align-items:center');
+        var state = { aud: '', mode: 'need' };   // 最初は、「雛形が必要なもの」（足りないもの）を出す
+        var AUDS = [['', 'すべての立場'], ['施工店', '施工店用'], ['工事部', '工事部用'], ['施工指導', '施工指導用'], ['外部パートナー', '外部パートナー用'], ['TS計画推進', 'TS計画推進']];
+        var MODES = [['need', '雛形が必要なもの（まだ、入っていない）'], ['have', '雛形が入っているもの'], ['all', 'すべて（使用中）'], ['old', '廃止した書類']];
+        var chipBar = el('div', 'display:flex;flex-wrap:wrap;gap:8px;margin-bottom:6px;align-items:center');
         var info = el('div', 'margin-bottom:6px;font-weight:bold');
         var tableHost = el('div');
         var cells = [];
-        var chipEls = [];
-        var chip = function (label, on, fn) {
-          var b = el('button', 'padding:' + (isMobile ? '9px 12px' : '5px 10px') + ';font-size:' + (isMobile ? '14px' : '12px') + ';cursor:pointer;border-radius:16px;border:1px solid #3498db;' + (on ? 'background:#3498db;color:#fff' : 'background:#fff;color:#3498db'), label);
-          b.type = 'button'; b.addEventListener('click', fn); return b;
+        var sel = function (opts, cur, attr, fn) {
+          var s2 = el('select', 'font-size:' + (isMobile ? '16px' : '13px') + ';padding:' + (isMobile ? '10px 8px' : '5px 6px') + ';border:1px solid #3498db;border-radius:4px;background:#fff;max-width:100%');
+          s2.setAttribute(attr, '1');
+          opts.forEach(function (o) { var op = document.createElement('option'); op.value = o[0]; op.textContent = o[1]; if (o[0] === cur) op.selected = true; s2.appendChild(op); });
+          s2.addEventListener('change', function () { fn(s2.value); }); return s2;
         };
-        function drawChips() {
-          chipBar.textContent = ''; chipEls = [];
-          AUDS.forEach(function (a) { var b = chip(a[1], state.aud === a[0], function () { state.aud = a[0]; drawChips(); draw(); }); b.setAttribute('data-aud', a[0] || 'all'); chipBar.appendChild(b); });
-          var f = chip('雛形ありだけ', state.withFile, function () { state.withFile = !state.withFile; drawChips(); draw(); }); f.setAttribute('data-filter-file', '1'); chipBar.appendChild(f);
-          var o = chip('廃止も見る', state.old, function () { state.old = !state.old; drawChips(); draw(); }); o.setAttribute('data-filter-old', '1'); chipBar.appendChild(o);
-        }
-        function draw() {
-          var shown = recs.filter(function (r) {
-            var old = r['使用状況'] && r['使用状況'].value === '廃止';
-            if (old && !state.old) return false;
+        var isOld = function (r) { return r['使用状況'] && r['使用状況'].value === '廃止'; };
+        var hasFile = function (r) { return (r[FILE_FIELD].value || []).length > 0; };
+        var visible = function () {
+          return recs.filter(function (r) {
             if (state.aud && !((r['見られる立場'] && r['見られる立場'].value) || []).some(function (x) { return x === state.aud; })) return false;
-            if (state.withFile && !(r[FILE_FIELD].value || []).length) return false;
+            if (state.mode === 'old') return isOld(r);
+            if (isOld(r)) return false;
+            if (state.mode === 'need') return !hasFile(r);
+            if (state.mode === 'have') return hasFile(r);
             return true;
           });
+        };
+        function drawChips() {
+          chipBar.textContent = '';
+          chipBar.appendChild(el('span', 'font-weight:bold', '立場'));
+          chipBar.appendChild(sel(AUDS, state.aud, 'data-aud-select', function (v) { state.aud = v; draw(); }));
+          chipBar.appendChild(el('span', 'font-weight:bold;margin-left:4px', '表示'));
+          chipBar.appendChild(sel(MODES, state.mode, 'data-mode-select', function (v) { state.mode = v; draw(); }));
+          var cp = el('button', 'padding:' + (isMobile ? '10px 12px' : '5px 10px') + ';font-size:' + (isMobile ? '14px' : '12px') + ';cursor:pointer;border:1px solid #3498db;border-radius:4px;background:#fff;color:#3498db', '表示中の書類名を、コピー'); cp.type = 'button'; cp.setAttribute('data-copy-list', '1');
+          cp.addEventListener('click', function () { var t = visible().map(function (r) { return r[NAME_FIELD].value; }).join('\n'); copyText(t).then(function (ok) { cp.textContent = ok ? 'コピーしました' : 'コピーできませんでした'; setTimeout(function () { cp.textContent = '表示中の書類名を、コピー'; }, 2000); }); });
+          chipBar.appendChild(cp);
+        }
+        function draw() {
+          var shown = visible();
           var none = shown.filter(function (r) { return !(r[FILE_FIELD].value || []).length; }).length;
-          info.textContent = (state.aud ? (AUDS.filter(function (a) { return a[0] === state.aud; })[0][1]) + 'の' : '') + '書類 ' + shown.length + ' 件　雛形あり ' + (shown.length - none) + ' 件　雛形なし ' + none + ' 件' + (uc ? '' : '　（案件くんを読めないため、作成数は出せません）');
+          var total = recs.filter(function (r) { return !isOld(r) && (!state.aud || ((r['見られる立場'] && r['見られる立場'].value) || []).indexOf(state.aud) >= 0); });
+          var need = total.filter(function (r) { return !hasFile(r); }).length;
+          info.textContent = (state.aud ? (AUDS.filter(function (a) { return a[0] === state.aud; })[0][1]) : 'すべての立場') + '：書類 ' + total.length + ' 件のうち、雛形が必要（まだ入っていない）なもの ' + need + ' 件　／　入っているもの ' + (total.length - need) + ' 件　（いま表示：' + shown.length + ' 件）';
           tableHost.textContent = ''; cells = [];
-          var wrap = el('div', 'overflow-x:auto'); var tb = el('table', 'border-collapse:collapse;width:100%;min-width:' + (isMobile ? '560px' : '720px'));
+          var wrap = el('div', 'overflow:auto;max-height:' + (isMobile ? '60vh' : '420px')); var tb = el('table', 'border-collapse:collapse;width:100%;min-width:' + (isMobile ? '560px' : '720px'));
           var head = el('tr'); ['工程', '書類名', '見られる立場', '雛形', '作成数', '最終作成日', '点検'].forEach(function (h) { head.appendChild(el('th', 'text-align:left;border-bottom:2px solid #cfd8e3;padding:4px 6px;white-space:nowrap', h)); });
           tb.appendChild(head);
           shown.forEach(function (r) {
