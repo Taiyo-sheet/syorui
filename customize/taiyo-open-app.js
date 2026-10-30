@@ -14,6 +14,8 @@
 
   // ▼ 開きたいアプリのURL（変えたいときはここだけ直す）
   var APP_URL = 'https://anken-kanri-1.onrender.com/';
+  // 鍵（?k=）は、リポジトリには入れない。反映のときだけ、本番のスマホ版ボタンと同じ鍵を入れる（scripts/with-open-key.js）
+  var OPEN_KEY = '';
   var LABEL = '案件管理アプリを開く';
   var SIZE = 52;
 
@@ -39,7 +41,7 @@
     function close() { text.style.maxWidth = '0'; text.style.opacity = '0'; text.style.marginLeft = '0'; }
     btn.addEventListener('mouseenter', open); btn.addEventListener('focus', open);
     btn.addEventListener('mouseleave', close); btn.addEventListener('blur', close);
-    btn.addEventListener('click', function () { window.open(APP_URL, '_blank'); });
+    btn.addEventListener('click', function () { window.open(OPEN_KEY ? APP_URL + '?k=' + encodeURIComponent(OPEN_KEY) : APP_URL, '_blank'); });
     document.body.appendChild(btn);
   }
 

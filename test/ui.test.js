@@ -421,7 +421,9 @@ test('画面：案件管理アプリを開くボタン（PC用）は、右下の
     await page.waitForFunction(() => document.getElementById('taiyo-open-app-btn').getBoundingClientRect().width > 150);
     assert.match(await btn.textContent(), /案件管理アプリを開く/);
     await btn.click();
-    assert.deepStrictEqual(await page.evaluate(() => window.__opened), ['https://anken-kanri-1.onrender.com/']);
+    const opened = await page.evaluate(() => window.__opened);   // 鍵（?k=）は、反映のときだけ入る。リポジトリの版は、鍵なし
+    assert.strictEqual(opened.length, 1);
+    assert.ok(/^https:\/\/anken-kanri-1\.onrender\.com\/(\?k=[^&\s]+)?$/.test(opened[0]), opened[0].replace(/k=.*/, 'k=…'));
     assert.deepStrictEqual(errors, []);
     await ctx.close();
   } finally { await browser.close(); await mock.close(); }
