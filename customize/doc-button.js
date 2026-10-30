@@ -4,10 +4,10 @@
  * 案件くんの詳細画面の上部に「書類を作る」ボタンが出ます。押すと、
  *   ・書類マスタの書類が工程別に並ぶ（工程・立場の選択肢も書類マスタから自動で読み取る）
  *   ・「作成して保存」で、雛形の {{案件くんの項目名}} が案件の値に置き換わり、
- *     「案件書類」アプリに版つきで保存される
+ *     案件くんのこの案件の「書類保管」表に、版つきで保存される（別のアプリは使いません）
  *
  * 設定は要りません。
- *   ・アプリは名前（書類マスタ／案件書類）で自動で見つけます
+ *   ・書類マスタは名前で自動で見つけます。保管用の「書類保管」表は、案件くんに scripts/add-doc-storage.js で足します
  *   ・雛形の {{ }} には、案件くんの「項目名」をそのまま書けば入ります
  *     例）{{案件名}} {{現場住所}} {{発注者}}   ※項目コードでも可
  *   ・このほか {{作成日}} {{版}} {{書類名}} も使えます
@@ -21,12 +21,18 @@
 (function () {
   'use strict';
 
-  var APP_NAMES = { master: '書類マスタ', docs: '案件書類' };
-  // 書類マスタ・案件書類の項目コード（scripts/create-apps.js で作ると、この名前になる）
+  var APP_NAMES = { master: '書類マスタ' };
+  // 書類マスタの項目コード（scripts/create-apps.js で作ると、この名前になる）
   var MF = { stage: '工程', order: '表示順', name: '書類名', desc: '説明', template: '雛形', audience: '見られる立場', target: '対象', status: '使用状況' };
-  var DF = { projectId: '案件ID', name: '書類名', stage: '工程', version: '版', file: '添付ファイル' };
+  // 案件くんの「書類保管」表（scripts/add-doc-storage.js で足す）の項目コード
+  var SUB = { table: '書類保管', name: '書類保管_書類名', stage: '書類保管_工程', version: '書類保管_版', file: '書類保管_ファイル', at: '書類保管_作成日',
+    // 承認とPDF（scripts/add-approval-fields.js で、書類保管の表に足す列。足すまでは、承認・PDF化のボタンは出ない）
+    status: '書類保管_承認状況', by: '書類保管_承認者', approvedAt: '書類保管_承認日時', pdf: '書類保管_PDF' };
+  var APPROVED = '承認済み';
+  // PDF化サーバーのURL（Render に置いた pdf-server/。空にすると、PDF化のボタンは押せなくなる）
+  var PDF_SERVER_URL = 'https://ts-pdf-server.onrender.com';
   var ACTIVE = '使用中';
-  var NAME_LABELS = ['案件名', '現場名', '工事名'];   // ファイル名に使う項目（先に見つかったもの）
+  var NAME_LABELS = ['工事名称', '案件名', '現場名', '工事名'];   // ファイル名に使う項目（先に見つかったもの）
   // 案件くんの項目のうち、「橋梁」「一般道路」など、書類マスタの「対象」と同じ言葉が入っているもの。
   // その項目名を入れると、案件を開いたときに、対象が自動で選ばれる（空のままなら、画面で手で選ぶ）
   var TARGET_LABEL = '';
@@ -63,6 +69,68 @@
     if (kind === 'pptx') return lines.join('</a:t></a:r><a:br/><a:r>' + (rpr || '') + '<a:t>');
     return lines.join('\n');
   }
+  // 議事録本文を、きちんとした議事録の形（見出しの帯、箇条書き、ToDoの表）の「段落のかたまり」にする（Word用）
+  //   ToDo の行が「期限｜担当｜内容」の形（｜で3つに区切る）なら、表にする。そうでなければ、箇条書きのまま
+  function parseMinutes(text) {
+    var sections = [], cur = null;
+    String(text || '').replace(/\r/g, '').split('\n').forEach(function (raw) {
+      var line = raw.replace(/\s+$/, '');
+      var h = line.trim().match(/^【([^】]+)】\s*(.*)$/);
+      if (h) { cur = { head: h[1], lines: [] }; sections.push(cur); if (h[2]) cur.lines.push(h[2]); return; }
+      if (!line.trim()) return;
+      if (!cur) { cur = { head: '', lines: [] }; sections.push(cur); }
+      cur.lines.push(line.trim());
+    });
+    return sections;
+  }
+  function wp(inner, ppr) { return '<w:p>' + (ppr ? '<w:pPr>' + ppr + '</w:pPr>' : '') + inner + '</w:p>'; }
+  function wr(text, rpr) { return '<w:r>' + (rpr ? '<w:rPr>' + rpr + '</w:rPr>' : '') + '<w:t xml:space="preserve">' + escXml(text) + '</w:t></w:r>'; }
+  function wcell(text, w, bold, fill) {
+    return '<w:tc><w:tcPr><w:tcW w:w="' + w + '" w:type="dxa"/>' + (fill ? '<w:shd w:val="clear" w:color="auto" w:fill="' + fill + '"/>' : '') + '</w:tcPr>' +
+      wp(wr(text, bold ? '<w:b/><w:sz w:val="20"/>' : '<w:sz w:val="20"/>'), '<w:spacing w:before="40" w:after="40"/>') + '</w:tc>';
+  }
+  function todoTable(rows) {
+    var W = [700, 5338, 1800, 1800], B = '<w:tblBorders>' + ['top', 'left', 'bottom', 'right', 'insideH', 'insideV'].map(function (e) { return '<w:' + e + ' w:val="single" w:sz="4" w:space="0" w:color="888888"/>'; }).join('') + '</w:tblBorders>';
+    var x = '<w:tbl><w:tblPr><w:tblW w:w="9638" w:type="dxa"/>' + B + '<w:tblLayout w:type="fixed"/></w:tblPr><w:tblGrid>' + W.map(function (w) { return '<w:gridCol w:w="' + w + '"/>'; }).join('') + '</w:tblGrid>';
+    x += '<w:tr><w:trPr><w:cantSplit/></w:trPr>' + wcell('No', W[0], true, 'E8EEF7') + wcell('内容', W[1], true, 'E8EEF7') + wcell('担当', W[2], true, 'E8EEF7') + wcell('期限', W[3], true, 'E8EEF7') + '</w:tr>';
+    rows.forEach(function (r, i) { x += '<w:tr><w:trPr><w:cantSplit/></w:trPr>' + wcell(String(i + 1), W[0]) + wcell(r[2], W[1]) + wcell(r[1], W[2]) + wcell(r[0], W[3]) + '</w:tr>'; });
+    return x + '</w:tbl>' + wp('', '<w:spacing w:after="60"/>');
+  }
+  function minutesParagraphs(text) {
+    var out = '';
+    parseMinutes(cleanValue(text)).forEach(function (sec) {
+      if (sec.head) out += wp(wr('■ ' + sec.head, '<w:b/><w:color w:val="FFFFFF"/><w:sz w:val="22"/>'), '<w:keepNext/><w:shd w:val="clear" w:color="auto" w:fill="1F3864"/><w:spacing w:before="200" w:after="80"/><w:ind w:left="80"/>');
+      var rows = [];
+      var todo = /^ToDo/i.test(sec.head);
+      sec.lines.forEach(function (l) {
+        var body = l.replace(/^[・\-*●•‣]\s*/, '');
+        var parts = body.split(/[｜|]/).map(function (x) { return x.trim(); });
+        if (todo && parts.length === 3 && parts[2]) { rows.push(parts); return; }
+        if (rows.length) { out += todoTable(rows); rows = []; }
+        out += wp(wr(l, '<w:sz w:val="21"/>'), '<w:spacing w:after="40"/><w:ind w:left="300" w:hanging="220"/>');
+      });
+      if (rows.length) out += todoTable(rows);
+      if (!sec.lines.length) out += wp(wr('なし', '<w:sz w:val="21"/>'), '<w:ind w:left="300"/>');
+    });
+    return out;
+  }
+  // 段落が、{{議事録本文}} だけなら、その段落ごと、上の形に入れ替える
+  function expandMinutes(xml, text) {
+    if (!String(text || '').trim()) return xml;
+    return xml.replace(/<w:p\b(?:(?!<\/w:p>)[\s\S])*<\/w:p>/g, function (p) {
+      return decodeLabel(p.replace(/<[^>]*>/g, '')) === '{{議事録本文}}' ? minutesParagraphs(text) : p;
+    });
+  }
+
+  // 議事録本文：【見出し】だけの行を太字にし、ほかは、改行でつなぐ（Word用）
+  function toXmlMinutes(v) {
+    var lines = cleanValue(v).split(/\r?\n/);
+    var parts = lines.map(function (l) {
+      var t = escXml(l);
+      return /^【[^】]+】$/.test(l.trim()) ? '</w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">' + t + '</w:t></w:r><w:r><w:t xml:space="preserve">' : t;
+    });
+    return parts.join('</w:t><w:br/><w:t xml:space="preserve">');
+  }
   function decodeLabel(s) {
     return s.replace(/&#x([0-9a-f]+);/gi, function (m, h) { return String.fromCodePoint(parseInt(h, 16)); })
       .replace(/&#(\d+);/g, function (m, d) { return String.fromCodePoint(parseInt(d, 10)); })
@@ -80,10 +148,12 @@
     return m ? m[0] : '';
   }
   // 戻り値：置き換えた XML。unknown に「値が見つからなかった {{名前}}」を集める
-  function replacePlaceholders(xml, values, kind, unknown) {
+  function replacePlaceholders(xml, values, kind, unknown, empty) {
     return xml.replace(PH, function (whole, inner, offset, str) {
       var label = decodeLabel(inner.replace(/<[^>]*>/g, ''));
       if (Object.prototype.hasOwnProperty.call(values, label)) {
+        if (empty && String(values[label]).trim() === '' && empty.indexOf(label) < 0) empty.push(label);
+        if (label === '議事録本文' && kind === 'docx') return toXmlMinutes(values[label]);
         return toXmlText(values[label], kind, kind === 'pptx' ? lastRunProps(str, offset) : '');
       }
       if (unknown && unknown.indexOf(label) < 0) unknown.push(label);
@@ -101,14 +171,15 @@
     });
   }
   function fillTemplate(JSZipLib, buf, ext, values) {
-    var unknown = [];
-    if (!OFFICE[ext]) return Promise.resolve({ data: buf, unknown: unknown });
+    var unknown = [], empty = [];
+    if (!OFFICE[ext]) return Promise.resolve({ data: buf, unknown: unknown, empty: empty });
     return JSZipLib.loadAsync(buf).then(function (zip) {
       var names = Object.keys(zip.files).filter(function (n) { return TARGET.test(n); });
       return Promise.all(names.map(function (n) {
         return zip.file(n).async('string').then(function (x) {
           if (n === 'xl/sharedStrings.xml') x = dropPhonetic(x);
-          var y = replacePlaceholders(x, values, ext, unknown);
+          if (ext === 'docx' && n === 'word/document.xml' && values['議事録本文']) x = expandMinutes(x, values['議事録本文']);   // 議事録本文は、きちんとした形に
+          var y = replacePlaceholders(x, values, ext, unknown, empty);
           // 名前が違うものに加えて、{{ }} が段落やセルをまたいでいて置き換えられなかったものも拾う
           (y.replace(/<[^>]*>/g, '').match(/\{\{[^{}]*\}\}/g) || []).forEach(function (t) {
             var l = decodeLabel(t.slice(2, -2));
@@ -117,22 +188,278 @@
           zip.file(n, y);
         });
       })).then(function () { return zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' }); })
-        .then(function (data) { return { data: data, unknown: unknown }; });
+        .then(function (data) { return { data: data, unknown: unknown, empty: empty }; });
     });
   }
-  // 雛形に {{ }} が1つでもあるか。なければ「案件の情報は入れず、雛形のまま使う書類」として扱う
-  function hasPlaceholders(JSZipLib, buf, ext) {
-    if (!OFFICE[ext]) return Promise.resolve(false);
+  // 雛形の中の {{ }} の名前を、全部集める（なければ空の配列）
+  function listPlaceholders(JSZipLib, buf, ext) {
+    if (!OFFICE[ext]) return Promise.resolve([]);
     return JSZipLib.loadAsync(buf).then(function (zip) {
       var names = Object.keys(zip.files).filter(function (n) { return TARGET.test(n); });
       return Promise.all(names.map(function (n) {
         return zip.file(n).async('string').then(function (x) {
           if (n === 'xl/sharedStrings.xml') x = dropPhonetic(x);
-          return /\{\{[^{}]+\}\}/.test(x.replace(/<[^>]*>/g, ''));
+          return (x.replace(/<[^>]*>/g, '').match(/\{\{[^{}]+\}\}/g) || []).map(function (t) { return decodeLabel(t.slice(2, -2)); });
         });
-      })).then(function (r) { return r.some(Boolean); });
+      })).then(function (r) { return [].concat.apply([], r); });
     });
   }
+  // 雛形に {{ }} が1つでもあるか。なければ「案件の情報は入れず、雛形のまま使う書類」として扱う
+  function hasPlaceholders(JSZipLib, buf, ext) {
+    return listPlaceholders(JSZipLib, buf, ext).then(function (l) { return l.length > 0; });
+  }
+  // 議事録など、作成のときに入力してもらう項目（雛形に {{打合せ日}} {{議事録メモ}} などと書くと、その入力欄が出る）
+  //   blank：入力されなかったときに入れる言葉（なければ、空のまま入れて、作成後に知らせる）
+  //   init ：入力欄の初めの値（関数なら、開いたときに決める）
+  function loginName() { try { return kintone.getLoginUser().name || ''; } catch (e) { return ''; } }
+  var ASK = [
+    { key: '議事録本文', label: '③ まとまった議事録（この内容が、書類に入ります。ここで、直せます）', type: 'doc' },
+    { key: '打合せ日', label: '打合せ日（初期値は今日）', type: 'date', blank: function () { return today(); } },
+    { key: '場所', label: '場所', type: 'text' },
+    { key: '出席者', label: '出席者（分からなければ空のまま→「不明」）', type: 'text', blank: '不明' },
+    { key: '作成者', label: '作成者（初期値は、開いた人）', type: 'text', init: function () { return loginName() || 'くに'; }, blank: function () { return loginName() || 'くに'; } },
+    { key: '議題', label: '議題（箇条書き。1行に1項目）', type: 'memo', blank: 'なし' },
+    { key: '議事録メモ', label: '打合せ内容（箇条書き。1行に1項目）', type: 'memo', blank: 'なし' },
+    { key: '決定事項', label: '決定事項（箇条書き。1行に1項目）', type: 'memo', blank: 'なし' },
+    { key: 'ToDo', label: 'ToDo（いつまでに・誰が・何を。1行に1つ）', type: 'memo', blank: 'なし' },
+    { key: '次回予定', label: '次回予定（あれば。「次回は〇月〇日」など）', type: 'text', blank: 'なし' }
+  ];
+  function askDefault(a) { return typeof a.blank === 'function' ? a.blank() : (a.blank || ''); }
+  // 音声の文字起こしを、議事録の項目に分ける（簡易版。外部には送りません。精度は高くないので、必ず、確認・修正してから作成する）
+  //   戻り値：{ 出席者, 場所, 議題, 議事録メモ, 決定事項, ToDo, 次回予定 }（見つからなかった項目は、空）
+  // 見出し（【決定事項】■ToDo など）が付いた文章（Copilot や Teams の「まとめ」を、見出し付きで出したもの）は、見出しごとに、そのまま振り分ける
+  var HEAD = [
+    ['出席者', /^(出席者|参加者|出席)$/], ['場所', /^(場所|会場|開催場所)$/], ['議題', /^(議題|アジェンダ|テーマ|目的)$/],
+    ['議事録メモ', /^(打合せ内容|打ち合わせ内容|内容|議事|議事録|要点|概要|討議内容|協議内容|ディスカッション|主な内容)$/],
+    ['決定事項', /^(決定事項|決定|合意事項|合意)$/], ['ToDo', /^(todo|to-do|やること|宿題|宿題事項|アクション|アクションアイテム|アクション項目|対応事項|今後の対応)$/i],
+    ['次回予定', /^(次回予定|次回|次回打合せ|次回の打合せ|次のステップ)$/]
+  ];
+  function headOf(line) {
+    var t = line.replace(/^[\s#＃■□◆◇●○▼▽【\[（(「*・\-]+/, '').replace(/[\s】\]）)」:：]+$/, '').replace(/^[0-9０-９]+[.．、)）]\s*/, '').trim();
+    for (var i = 0; i < HEAD.length; i++) { if (HEAD[i][1].test(t)) return HEAD[i][0]; }
+    return '';
+  }
+  // Copilotなどの返事の、飾り（太字の ** ・表の | ・コード記号）を取って、ふつうの文章に直す
+  //   「| 出席者 | 太田 |」は「出席者：太田」に、「**出席者**」は「出席者」に
+  function stripMarkdown(text) {
+    return String(text || '').replace(/\r/g, '').split('\n').map(function (l) {
+      var t = l.trim();
+      if (/^\|.*\|$/.test(t)) {
+        if (/^\|[\s:\-|]+\|$/.test(t)) return '';   // 表の罫線の行（|---|---|）
+        var cells = t.slice(1, -1).split('|').map(function (c) { return c.trim(); });
+        if (cells.length >= 2 && /^(項目|見出し|区分)$/.test(cells[0]) && /^(内容|詳細|値)$/.test(cells[1])) return '';   // 表の見出しの行
+        return cells.length >= 2 ? cells[0] + '：' + cells.slice(1).join(' ') : cells[0];
+      }
+      return l.replace(/\*\*|__|`/g, '');
+    }).join('\n');
+  }
+  function summarizeByHeadings(text) {
+    var lines = stripMarkdown(text).split('\n').map(function (l) { return l.trim(); }).filter(Boolean);
+    var INL = /^[\s■□◆◇●○▼▽【\[#＃*・\-]*([^:：】\]\s]{1,10})[】\]]?\s*[:：]?\s*(.+)$/;
+    var onlyHeads = lines.filter(function (l) { if (headOf(l)) return true; var m = l.match(INL); return !!(m && headOf(m[1]) && /^[【\[]|[:：]/.test(l.slice(0, (m[1].length) + 3))); }).length;
+    if (onlyHeads < 2) return null;   // 見出し（見出しだけの行、または「【出席者】太田」「決定事項：…」の形の行）が、2つ以上あるときだけ、見出しで振り分ける
+    var out = { '出席者': [], '場所': [], '議題': [], '議事録メモ': [], '決定事項': [], 'ToDo': [], '次回予定': [] }, cur = '';
+    lines.forEach(function (line) {
+      var hk = headOf(line);
+      if (hk) { cur = hk; return; }
+      var inl = line.match(/^[\s■□◆◇●○▼▽【\[#＃*・\-]*([^:：】\]\s]{1,10})[】\]]?\s*[:：]?\s*(.+)$/);   // 「【次回予定】次回は…」「決定事項：…」のように、同じ行に中身がある
+      if (inl && headOf(inl[1])) { cur = headOf(inl[1]); out[cur].push(inl[2].trim()); return; }
+      if (cur) out[cur].push(line.replace(/^[\s・\-*●•‣]+/, '').trim());
+    });
+    var res = {};
+    Object.keys(out).forEach(function (k) {
+      var list = out[k].filter(Boolean);
+      res[k] = (k === '出席者' || k === '場所' || k === '次回予定') ? list.join('、') : list.map(function (l) { return '・' + l; }).join('\n');
+    });
+    return res;
+  }
+  // 「10月25日までに太田さんが見積書を出します」→「10/25｜太田｜見積書を出す」。期限の言い方：〇月〇日／〇/〇／来週／明日／月末／〇日 など。当てはまらなければ null
+  function parseTodo(l) {
+    var DUE = '(?:\\d{1,2}月\\d{1,2}日|\\d{1,2}\\/\\d{1,2}|来週(?:の?[月火水木金土日]曜日?)?|今週(?:中)?|明日|明後日|今月末|月末|来月(?:\\d{1,2}日)?|\\d{1,2}日)';
+    var m = String(l || '').match(new RegExp('^(' + DUE + ')(?:まで(?:に)?)、?(.+)$'));
+    if (!m) return null;
+    var due = m[1].replace(/^(\d{1,2})月(\d{1,2})日$/, '$1/$2');
+    var pm = m[2].match(/^(.+?)(?:さん|様)?(?:が|は|に|から)、?(.+?)。?$/);
+    if (!pm || pm[1].length > 8) return null;
+    var what = pm[2].replace(/出します$/, '出す').replace(/もらいます$/, 'もらう').replace(/お願いします$/, 'をお願いする').replace(/します$/, 'する').replace(/ます$/, '');
+    return due + '｜' + pm[1].trim() + '｜' + what;
+  }
+  // 仕分け画面の部品：整理の結果（項目ごとの文章）を、1行ずつの「項目＋文」の並びにする／並びを、項目ごとの文章に戻す
+  var SORT_CATS = [['出席者', '出席者'], ['場所', '場所'], ['議題', '議題'], ['議事録メモ', '打合せ内容'], ['決定事項', '決定事項'], ['ToDo', 'ToDo'], ['次回予定', '次回予定']];
+  function sortItemsOf(res) {
+    var items = [];
+    SORT_CATS.forEach(function (c) {
+      var v = String((res && res[c[0]]) || '').trim(); if (!v || v === 'なし' || v === '不明') return;
+      var parts = c[0] === '出席者' || c[0] === '場所' || c[0] === '次回予定' ? [v] : v.split('\n');   // 出席者・場所・次回予定は、1つの枠（1行にまとめて直せる）
+      parts.forEach(function (t) { t = t.replace(/^[\s・\-*●•‣]+/, '').trim(); if (t) items.push({ cat: c[0], text: t }); });
+    });
+    return items;
+  }
+  function sortResOf(items) {
+    var by = {}; SORT_CATS.forEach(function (c) { by[c[0]] = []; });
+    items.forEach(function (it) { var t = String(it.text || '').trim(); if (it.cat && t && by[it.cat]) by[it.cat].push(t); });
+    var out = {};
+    SORT_CATS.forEach(function (c) { out[c[0]] = (c[0] === '出席者' || c[0] === '場所' || c[0] === '次回予定') ? by[c[0]].join('、') : by[c[0]].join('\n'); });
+    return out;
+  }
+  // 「まとまった議事録」の枠の文章を、きちんとした見出し（【出席者】…）の形に整える。
+  //   すでに【見出し】が2つ以上あれば、そのまま。Copilotの返事（太字・表・番号つき見出し）は、見出しの形に直す
+  function canonicalMinutes(t) {
+    var s = String(t || '');
+    if ((s.match(/^【(?:出席者|場所|議題|打合せ内容|決定事項|ToDo|次回予定)】/gm) || []).length >= 2) return s;
+    var r = summarizeByHeadings(s);
+    return r ? formatMinutes(r) : s;
+  }
+  function summarizeLocal(text) {
+    text = stripMarkdown(text);
+    var byHead = summarizeByHeadings(text); if (byHead) return byHead;
+    var out = { '出席者': '', '場所': '', '議題': [], '議事録メモ': [], '決定事項': [], 'ToDo': [], '次回予定': '' };
+    var FILLER = /^(?:(?:えー+(?:っと)?|あー+|えっと|えーと|あの+|その+|まあ|はい|ええ|うん|そうですね)[、。,\s]*)+/;
+    String(text || '').replace(/\r/g, '').split(/\n|(?<=[。！？!?])/).forEach(function (raw) {
+      var l = raw.replace(/^[\s・\-*●•‣]+/, '').replace(FILLER, '').trim();
+      if (l.length < 2) return;
+      var m;
+      if ((m = l.match(/^(?:出席者|参加者)[:：]\s*(.+)$/))) { out['出席者'] = m[1].trim(); return; }
+      if ((m = l.match(/^(?:場所|会場)[:：]\s*(.+)$/))) { out['場所'] = m[1].trim(); return; }
+      // 話すときに、見出しの言葉を言った場合（「出席者は、太田さんと國井さんです」「決まったことは、…」「宿題は、…」など）
+      if ((m = l.match(/^(出席者|参加者|メンバー)(?:は|：|:)、?\s*(.+)$/))) { out['出席者'] = m[2].replace(/(?:です|でした)。?$/, '').replace(/。$/, '').replace(/(さん|様|氏)/g, '').split(/[、,，]|と/).map(function (x) { x = x.trim(); var w = x.match(/^(.+?)の(.+)$/); if (w) x = w[2] + '（' + w[1] + '）'; return x; }).filter(Boolean).join('、'); return; }
+      if ((m = l.match(/^(?:場所|会場)(?:は|：|:)、?\s*(.+?)(?:です|でした)?。?$/)) && !out['場所']) { out['場所'] = m[1].trim(); return; }
+      if ((m = l.match(/^(?:(?:本日|今日|今回)の)?(?:議題|テーマ|話題)(?:は|：|:)、?\s*(.+)$/))) { m[1].replace(/(?:です|でした)。?$/, '').replace(/。$/, '').split(/、/).forEach(function (x) { x = x.trim(); if (x) out['議題'].push(x); }); return; }
+      if ((m = l.match(/^(?:宿題|やること|アクション(?:アイテム)?|ToDo|TODO|タスク)(?:は|：|:)、?\s*(.+)$/))) { var td0 = parseTodo(m[1]); if (td0) { out['ToDo'].push(td0); return; } m[1].replace(/。$/, '').split(/、/).forEach(function (x) { x = x.trim(); if (x) out['ToDo'].push(x); }); return; }
+      // 出席・場所の言い回し：「今日は現場事務所で、A、B、元請のCが出席して…」「本日はオンラインで、AさんとBさんが参加しました」
+      if ((m = l.match(/^(?:今日は|本日は|今回は)?(?:(.+?)で、)?(.+?)(?:が|は)?(?:出席|参加)(?:して|しました|でした|です|者)/)) && /[、とと]|さん|様|氏/.test(m[2])) {
+        if (m[1] && !out['場所']) out['場所'] = m[1].trim();
+        if (!out['出席者']) out['出席者'] = m[2].replace(/(さん|様|氏)/g, '').split(/[、,，と]/).map(function (x) { x = x.trim(); var w = x.match(/^(.+?)の(.+)$/); if (w) x = w[2] + '（' + w[1] + '）'; return x; }).filter(Boolean).join('、');
+        return;
+      }
+      if (!out['場所'] && (m = l.match(/^(?:今日は|本日は|今回は)?(現場事務所|現場|オンライン|Teams|ＴＥＡＭＳ|Zoom|事務所|会議室|先方[^、。]{0,6}|[^、。]{1,10}(?:支店|営業所|本社|工場))(?:で|にて)(?:行いました|開きました|実施しました|打合せ)/))) { out['場所'] = m[1]; return; }
+      // 議題の言い回し：「〇〇について（確認・相談・検討・話し合い）しました」
+      if ((m = l.match(/^(.{2,30}?)(?:について|の件(?:について)?)(?:は)?、?(?:確認|相談|検討|話し合い|協議|共有|説明|打合せ|打ち合わせ)(?:を行い)?(?:しました|ました|した)/))) { out['議題'].push(m[1].trim()); return; }
+      // 担当の言い回し（期限なし）：「藤原さんは、〇〇をお願いします」「鈴木さんには、〇〇をお願いします」
+      if ((m = l.match(/^([一-龥々ァ-ヶー]{2,5})(?:さん|様)(?:は|には|に|から)、?(.+?)(?:を)?(?:お願いします|お願いしました|お願いしたい|してもらいます|していただきます|担当します|担当してもらいます)/))) { out['ToDo'].push('｜' + m[1] + '｜' + m[2].replace(/を$/, '')); return; }
+      // 決定の言い回し：「〜ことになりました」「〜ということで合意しました」「〜で決まりました」「〜にします」
+      if (/(ことになりました|ことにしました|ということで(?:合意|了解|決定|確定)|で(?:合意|了解)しました|に(?:決まり|決定)しました|で(?:決定|確定)(?:しました|です)|で進めます|でいきます|で行きます|を採用(?:します|しました)|にします。?$|とします。?$)/.test(l) && !/(お願い|してください)/.test(l)) { out['決定事項'].push(l.replace(/。$/, '')); return; }
+      // ふつうに話した言い回し（「〇〇で、△△さんと□□で行いました」「10月25日までに太田さんが…します」など）
+      if ((m = l.match(/(?:打合せ|打ち合わせ|会議|ミーティング)は、?(.+?)で、?(.+?)で(?:行い|開き|実施|おこない)/))) {
+        if (!out['場所']) out['場所'] = m[1].trim();
+        if (!out['出席者']) out['出席者'] = m[2].split(/[、,，と]/).map(function (x) { x = x.trim(); var w = x.match(/^(.+?)の(.+)$/); if (w) x = w[2] + '（' + w[1] + '）'; return x.replace(/(さん|様|氏)(?=（|$)/, ''); }).filter(Boolean).join('、');
+        return;
+      }
+      var td = parseTodo(l); if (td) { out['ToDo'].push(td); return; }
+      // 決定の言い回し：「〜ことになりました」「〜ということで合意しました」「〜で決まりました」「〜にします」
+      if (/(ことになりました|ことにしました|ということで(?:合意|了解|決定|確定)|で(?:合意|了解)しました|に(?:決まり|決定)しました|で(?:決定|確定)(?:しました|です)|で進めます|でいきます|で行きます|を採用(?:します|しました)|にします。?$|とします。?$)/.test(l) && !/(お願い|してください)/.test(l)) { out['決定事項'].push(l.replace(/。$/, '')); return; }
+      // ふつうに話した言い回し（「〇〇で、△△さんと□□で行いました」「10月25日までに太田さんが…します」など）
+      if ((m = l.match(/(?:打合せ|打ち合わせ|会議|ミーティング)は、?(.+?)で、?(.+?)で(?:行い|開き|実施|おこない)/))) {
+        if (!out['場所']) out['場所'] = m[1].trim();
+        if (!out['出席者']) out['出席者'] = m[2].split(/[、,，と]/).map(function (x) { x = x.trim(); var w = x.match(/^(.+?)の(.+)$/); if (w) x = w[2] + '（' + w[1] + '）'; return x.replace(/(さん|様|氏)(?=（|$)/, ''); }).filter(Boolean).join('、');
+        return;
+      }
+      if ((m = l.match(/^(\d{1,2})月(\d{1,2})日|^(\d{1,2})\/(\d{1,2})|^(来週(?:の?[月火水木金土日]曜日?)?|今週(?:中)?|明日|明後日|今月末|月末|来月(?:\d{1,2}日)?|\d{1,2}日)/)) && /^(?:[^、。]{0,12})?(?:まで(?:に)?)/.test(l.replace(/^\d{1,2}月\d{1,2}日|^\d{1,2}\/\d{1,2}|^来週(?:の?[月火水木金土日]曜日?)?|^今週(?:中)?|^明日|^明後日|^今月末|^月末|^来月(?:\d{1,2}日)?|^\d{1,2}日/, ''))) {
+        var due = m[1] ? m[1] + '/' + m[2] : m[3] ? m[3] + '/' + m[4] : m[5];
+        var rest = l.replace(/^(?:\d{1,2}月\d{1,2}日|\d{1,2}\/\d{1,2}|来週(?:の?[月火水木金土日]曜日?)?|今週(?:中)?|明日|明後日|今月末|月末|来月(?:\d{1,2}日)?|\d{1,2}日)(?:まで(?:に)?)、?/, '');
+        var pm = rest.match(/^(.+?)(?:さん|様)?(?:が|は|に|から)、?(.+?)。?$/);
+        if (pm && pm[1].length <= 8) {
+          var what = pm[2].replace(/出します$/, '出す').replace(/もらいます$/, 'もらう').replace(/お願いします$/, 'をお願いする').replace(/します$/, 'する').replace(/ます$/, '');
+          out['ToDo'].push(due + '｜' + pm[1].trim() + '｜' + what); return;
+        }
+      }
+      if ((m = l.match(/^(?:決まったこと|決まったの|決定事項|決定)(?:は|として|[:：])、?\s*(.+)$/))) {
+        m[1].replace(/。$/, '').replace(/です$/, '').split('、').forEach(function (x) { x = x.trim(); if (x) out['決定事項'].push(x); }); return;
+      }
+      if ((m = l.match(/^(?:次回|次の)(?:の打合せ|の打ち合わせ|の会議|予定)?(?:は|：|:)?、?\s*(.+)$/)) && !out['次回予定']) { out['次回予定'] = m[1].replace(/です。?$/, '').replace(/。$/, ''); return; }
+      if ((m = l.match(/^(?:まず|次に|それから|続いて|最後に)、?(.+?)(?:ですが|については|について|なんですが)、?/))) {
+        out['議題'].push(m[1].trim());
+        var rest = l.slice(m[0].length).replace(/。$/, '').trim(); if (rest.length > 1) out['議事録メモ'].push(rest);
+        return;
+      }
+      if (/次回/.test(l) && !out['次回予定']) { out['次回予定'] = l; return; }
+      if (/(決定|決まり|決めまし|確定|で行く|で進め|で合意|ということで|とします|することにな)/.test(l)) { out['決定事項'].push(l); return; }
+      if (/(まで(に)?|お願い|対応|送付|提出|手配|連絡|確認し|調整|共有)/.test(l) && /(\d{1,2}[\/月]\d{1,2}|来週|今週|明日|明後日|今月|来月|月末|至急|早め)/.test(l)) { out['ToDo'].push(l); return; }
+      if (/(について|の件|議題|テーマ)/.test(l) && l.length <= 40) { out['議題'].push(l.replace(/。$/, '')); return; }
+      out['議事録メモ'].push(l.replace(/。$/, ''));
+    });
+    ['議題', '議事録メモ', '決定事項', 'ToDo'].forEach(function (k) { out[k] = out[k].join('\n'); });
+    return out;
+  }
+
+  // 外部のAIに送る前に、個人情報などを、符号（【人物1】【電話1】…）に置き換える。AIの返事が戻ったら、元の言葉に、戻す。
+  // 置き換えるもの：電話番号・メールアドレス・郵便番号・金額（〇円）・「〇〇さん／様／氏／君／くん」の名前・利用者が、指定した言葉
+  // ※ 敬称のない名前や、文脈で分かる情報は、置き換えられません（完全ではありません）。送る内容は、送る前に、画面で確認できます
+  function maskForAI(text, extraWords) {
+    var map = {}, counts = {}, src = String(text || '');
+    var put = function (kind, orig) {
+      for (var k in map) { if (map[k] === orig) return k; }
+      counts[kind] = (counts[kind] || 0) + 1; var tok = '【' + kind + counts[kind] + '】'; map[tok] = orig; return tok;
+    };
+    (extraWords || []).filter(Boolean).forEach(function (w) { src = src.split(w).join(put('伏せ', w)); });
+    src = src.replace(/0\d{1,4}[-ー－]\d{1,4}[-ー－]\d{3,4}/g, function (m) { return put('電話', m); });
+    src = src.replace(/[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}/g, function (m) { return put('メール', m); });
+    src = src.replace(/〒?\s?\d{3}[-ー－]\d{4}/g, function (m) { return put('郵便番号', m); });
+    src = src.replace(/[¥￥]\s?[\d,，]+|[\d,，.]+\s?(?:万円|千円|円)/g, function (m) { return put('金額', m); });
+    src = src.replace(/([一-龥々ァ-ヶー]{2,5})(さん|様|氏|君|くん|殿)/g, function (m, name, h) {
+      if (/^(お客|担当|先方|当方|各位|関係|責任|営業|現場|職長|元請|発注|下請|施主|所長|課長|部長)/.test(name)) return m;
+      return put('人物', name) + h;
+    });
+    return {
+      masked: src,
+      unmask: function (t) { return String(t || '').replace(/【(?:人物|電話|メール|郵便番号|金額|伏せ)\d+】/g, function (tok) { return map[tok] != null ? map[tok] : tok; }); },
+      count: Object.keys(map).length
+    };
+  }
+
+  // 項目に分けた結果を、見出し付きの、ひとかたまりの文章にする
+  var MINUTES_ORDER = [['出席者', '出席者', '不明'], ['場所', '場所', ''], ['議題', '議題', 'なし'], ['議事録メモ', '打合せ内容', 'なし'], ['決定事項', '決定事項', 'なし'], ['ToDo', 'ToDo', 'なし'], ['次回予定', '次回予定', 'なし']];
+  function formatMinutes(res) {
+    return MINUTES_ORDER.map(function (o) {
+      var v = String((res && res[o[0]]) || '').trim() || o[2];
+      return '【' + o[1] + '】\n' + v;
+    }).join('\n\n');
+  }
+  // 箇条書きの記号（- * ● • ・）をそろえる。空行は取り除く
+  function tidyMemo(t) {
+    return String(t || '').split(/\r?\n/).map(function (l) { return l.trim(); }).filter(Boolean)
+      .map(function (l) { return l.replace(/^[-*●•・‣]\s*/, '・'); }).join('\n');
+  }
+  // 書類の文字を取り出す（docx・xlsx・pptx）。段落・セルの区切りは、改行にする
+  function extractText(JSZipLib, buf, ext) {
+    if (!OFFICE[ext]) return Promise.resolve('');
+    return JSZipLib.loadAsync(buf).then(function (zip) {
+      var names = Object.keys(zip.files).filter(function (n) { return TARGET.test(n); });
+      return Promise.all(names.map(function (n) {
+        return zip.file(n).async('string').then(function (x) {
+          return decodeLabel(x.replace(/<\/(w:p|a:p|si|row|w:tr)>/g, '\n').replace(/<[^>]*>/g, ''));
+        });
+      })).then(function (r) { return r.join('\n'); });
+    });
+  }
+  // 書類のチェック（外部には送らず、この画面の中だけで行う）。指摘のリストを返す（なければ空）
+  //   values：案件くんの値（項目名 → 値）。書類の「工事名称：〇〇」が、案件くんの値と違えば、指摘する
+  // 案件くんの値と、書類の値を、突き合わせる項目。書類に「項目名：値」の行があり、値が違えば、指摘する（案件くんの全項目が対象）
+  var NOT_CHECKED = { '作成日': 1, '版': 1, '書類名': 1 };
+  function checkText(text, values) {
+    var out = [], t = String(text || '');
+    var left = (t.match(/\{\{[^{}]+\}\}/g) || []).filter(function (x, i, a) { return a.indexOf(x) === i; });
+    if (left.length) out.push('置き換えられていない項目が残っています：' + left.join(' '));
+    // 「■ 工事場所：」のあとが、空のまま
+    var blanks = [];
+    t.split('\n').forEach(function (l) {
+      var m = l.match(/^[\s■●◆□・]*([^\s:：（）()]{1,14})[:：]\s*$/);
+      if (m && blanks.indexOf(m[1]) < 0) blanks.push(m[1]);
+    });
+    if (blanks.length) out.push('値が空の欄があります：' + blanks.join('、'));
+    // 案件くんの値と、書類の値が違う（案件くんの項目名ごとに、書類の「項目名：値」の行と突き合わせる）
+    var norm = function (x) { return String(x).replace(/\s+/g, ''); };
+    Object.keys(values || {}).forEach(function (lb) {
+      var want = values[lb] == null ? '' : String(values[lb]).trim();
+      if (NOT_CHECKED[lb] || !want || /\n/.test(want) || want.length > 80 || lb.length > 30) return;
+      var m = t.match(new RegExp('(?:^|\\n)[\\s■●◆□・]*' + lb.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[:：][ \\t　]*([^\\n]+)'));
+      if (m && m[1].trim() && norm(m[1]) !== norm(want)) out.push('「' + lb + '」が、案件くんの値と違います（書類：' + m[1].trim() + '／案件くん：' + want + '）');
+    });
+    if (/（例[:：]|\(例[:：]/.test(t)) out.push('「（例：…）」の見本の文が、そのまま残っています');
+    if (/(^|\n)[^\n]*[:：]?\s*(　|\s)+年(　|\s)+月(　|\s)+日/.test(t)) out.push('日付が空欄のようです（「　年　月　日」）');
+    return out;
+  }
+
   // 案件名から、橋梁か一般道路かを推定する。「〇〇橋」「高架橋」「跨線橋」「橋梁」が入っていれば橋梁。
   // 「橋本」「橋口」のような地名の「橋」は、橋として数えない
   var BRIDGE = /高架|跨線|橋梁|[^\s\u3000橋]橋(?![本口田爪立場詰間])/;
@@ -154,10 +481,15 @@
   }
 
 
+  // 書類マスタ（master-template.js）が、「試しに作る」で、この部品だけを借りるときの出口（この画面では、ボタンなどは、一切出さない）
+  if (typeof kintone !== 'undefined' && typeof window !== 'undefined' && window.__TS_DOC_ENGINE_ONLY) {
+    window.TSDocEngine = { formatMinutes: formatMinutes, fillTemplate: fillTemplate, buildValues: buildValues, checkText: checkText, extractText: extractText, fieldText: fieldText, ASK: ASK, NAME_LABELS: NAME_LABELS };
+    return;
+  }
   // Node（テスト）から使うときは、ここまでの部品だけを渡して終わる
   if (typeof kintone === 'undefined') {
     if (typeof module !== 'undefined' && module.exports) {
-      module.exports = { fieldText: fieldText, replacePlaceholders: replacePlaceholders, fillTemplate: fillTemplate, hasPlaceholders: hasPlaceholders, guessTarget: guessTarget, buildFilename: buildFilename, buildValues: buildValues, quote: quote, DF: DF, MF: MF, today: today };
+      module.exports = { canonicalMinutes: canonicalMinutes, stripMarkdown: stripMarkdown, emptyFieldsOf: emptyFieldsOf, formatMinutes: formatMinutes, maskForAI: maskForAI, summarizeLocal: summarizeLocal, checkText: checkText, extractText: extractText, tidyMemo: tidyMemo, fieldText: fieldText, replacePlaceholders: replacePlaceholders, fillTemplate: fillTemplate, hasPlaceholders: hasPlaceholders, guessTarget: guessTarget, buildFilename: buildFilename, buildValues: buildValues, quote: quote, SUB: SUB, MF: MF, today: today };
     }
     return;
   }
@@ -226,8 +558,28 @@
     });
   }
 
-  // 雛形をそのまま保存（ダウンロード）する。案件書類には保存しない
+  // 雛形をそのまま保存（ダウンロード）する。案件には保存しない
+  // スマホ（キントーンのアプリ）では、ファイルを開けない（「指定されたアプリが見つかりません」になる）ため、書類の中身を、画面に、文字で見せる
+  var pendingReload = false;   // スマホ：作成のあと、内容を閉じたら、画面を更新する
+  function textModal(title, text) {
+    var cover = el('div', 'position:fixed;left:0;top:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:10002;overflow:auto');
+    var card = el('div', 'background:#fff;margin:16px 12px;border-radius:8px;padding:14px;font-size:14px;box-sizing:border-box');
+    card.appendChild(el('div', 'font-weight:bold;font-size:15px;margin-bottom:4px', title));
+    card.appendChild(el('div', 'font-size:12px;color:#666;margin-bottom:8px', 'スマホでは、ファイルは開けないため、文字だけ表示します（表や色は出ません）。体裁どおりに見るには、PCで開いてください。'));
+    var pre = el('pre', 'white-space:pre-wrap;word-break:break-all;background:#f7f7f7;border:1px solid #ddd;border-radius:4px;padding:8px;margin:0;font-size:13px;line-height:1.6;max-height:60vh;overflow:auto', text);
+    pre.setAttribute('data-doc-text', '1'); card.appendChild(pre);
+    var close = el('button', 'margin-top:10px;padding:10px 18px;font-size:15px;cursor:pointer', '閉じる'); close.type = 'button';
+    close.addEventListener('click', function () { document.body.removeChild(cover); if (pendingReload) location.reload(); });
+    card.appendChild(close); cover.appendChild(card); document.body.appendChild(cover);
+  }
+  function previewDoc(data, filename) {
+    var ext = ((String(filename).match(/\.([^.]+)$/) || [])[1] || '').toLowerCase();
+    if (!OFFICE[ext]) { textModal('「' + filename + '」', 'このファイルは、スマホでは開けません。PCで開いてください。'); return; }
+    extractText(JSZip, data, ext).then(function (t) { textModal('「' + filename + '」の内容', t || '（文字は、ありませんでした）'); },
+      function () { textModal('「' + filename + '」', '中身を読み取れませんでした。PCで開いてください。'); });
+  }
   function saveAs(data, filename) {
+    if (isMobile) { previewDoc(data, filename); return; }
     var url = URL.createObjectURL(new Blob([data]));
     var a = document.createElement('a');
     a.href = url; a.download = filename;
@@ -235,6 +587,7 @@
     setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
   }
   var kinds = {};   // 雛形のファイルキー → 'merge'（{{ }}あり）／'plain'（雛形のまま）
+  var phs = {};     // 雛形のファイルキー → 雛形の中の {{ }} の名前
   function templateOf(rec) { var f = rec[MF.template] && rec[MF.template].value; return f && f[0]; }
   function extOf(name) { return ((String(name).match(/\.([^.]+)$/) || [])[1] || '').toLowerCase(); }
   var pending = {};
@@ -243,66 +596,167 @@
     if (!tpl) return Promise.resolve('merge');
     if (kinds[tpl.fileKey]) return Promise.resolve(kinds[tpl.fileKey]);
     if (pending[tpl.fileKey]) return pending[tpl.fileKey];
-    pending[tpl.fileKey] = download(tpl.fileKey).then(function (buf) { return hasPlaceholders(JSZip, buf, extOf(tpl.name)); })
-      .then(function (has) { kinds[tpl.fileKey] = has ? 'merge' : 'plain'; delete pending[tpl.fileKey]; return kinds[tpl.fileKey]; },
+    pending[tpl.fileKey] = download(tpl.fileKey).then(function (buf) { return listPlaceholders(JSZip, buf, extOf(tpl.name)); })
+      .then(function (list) { phs[tpl.fileKey] = list; kinds[tpl.fileKey] = list.length ? 'merge' : 'plain'; delete pending[tpl.fileKey]; return kinds[tpl.fileKey]; },
         function () { delete pending[tpl.fileKey]; return 'merge'; });   // 調べられないときは、従来どおり「作成して保存」にする
     return pending[tpl.fileKey];
   }
+  // 雛形の {{ }} のうち、案件くんの項目で、値が空のもの（画面で入力する項目・自動で入る言葉は、数えない）
+  function emptyFieldsOf(rec, values) {
+    var t = templateOf(rec), l = (t && phs[t.fileKey]) || [], seen = {}, out = [];
+    l.forEach(function (n) {
+      if (seen[n] || ASK.some(function (a) { return a.key === n; }) || !Object.prototype.hasOwnProperty.call(values, n)) return;
+      seen[n] = 1; if (String(values[n] == null ? '' : values[n]).trim() === '') out.push(n);
+    });
+    return out;
+  }
+  function asksOf(rec) { var t = templateOf(rec); var l = (t && phs[t.fileKey]) || []; return ASK.filter(function (a) { return l.indexOf(a.key) >= 0; }); }
   function kindOf(rec) { var t = templateOf(rec); return t ? kinds[t.fileKey] : undefined; }
   function openAsIs(rec) {
     var tpl = templateOf(rec);
     return download(tpl.fileKey).then(function (buf) { saveAs(buf, tpl.name); return tpl.name; });
   }
 
-  // ---------- 案件書類 ----------
-  function loadExisting(projectId) {
-    return findAppId(APP_NAMES.docs).then(function (appId) {
-      var q = DF.projectId + ' = ' + Number(projectId) + ' order by ' + DF.version + ' desc limit 500';
-      return api('GET', '/k/v1/records', { app: appId, query: q, fields: ['$id', DF.name, DF.version] }).then(function (r) {
-        var map = {};
-        r.records.forEach(function (rec) {
-          var n = rec[DF.name].value;
-          if (!map[n]) map[n] = { version: Number(rec[DF.version].value || 0), id: rec.$id.value };
-        });
-        return map;
+  // ---------- 書類の保管（案件くんの「書類保管」表） ----------
+  function projectRecord(projectId) {
+    return api('GET', '/k/v1/record', { app: appApi.getId(), id: projectId }).then(function (r) {
+      if (!r.record[SUB.table]) throw new Error('案件くんに「' + SUB.table + '」の表がありません。先に scripts/add-doc-storage.js で追加してください');
+      return r.record;
+    });
+  }
+  function rowsOf(record) { return (record[SUB.table] && record[SUB.table].value) || []; }
+  function cellText(row, code) { var f = row.value[code]; return f && f.value != null ? String(f.value) : ''; }
+  // 書類名ごとの最新版（同じ版が並んだときは、後ろの行を採る）
+  function existingOf(record) {
+    var map = {};
+    rowsOf(record).forEach(function (row) {
+      var n = cellText(row, SUB.name), v = Number(cellText(row, SUB.version) || 0), files = row.value[SUB.file] && row.value[SUB.file].value;
+      var pdfs = row.value[SUB.pdf] && row.value[SUB.pdf].value;
+      if (n && (!map[n] || v >= map[n].version)) map[n] = {
+        version: v, file: files && files[0] ? files[0] : null, rowId: row.id,
+        approved: cellText(row, SUB.status) === APPROVED, approver: cellText(row, SUB.by), approvedAt: cellText(row, SUB.approvedAt),
+        pdf: pdfs && pdfs[0] ? pdfs[0] : null
+      };
+    });
+    return map;
+  }
+  // 書類保管の既存の行を、そのまま送り直せる形にする（送らなかった行は消えてしまうため）
+  function keepRow(row) {
+    var v = {};
+    [SUB.name, SUB.stage, SUB.version, SUB.at].forEach(function (c) { v[c] = { value: cellText(row, c) }; });
+    [SUB.status, SUB.by, SUB.approvedAt].forEach(function (c) { if (row.value[c]) v[c] = { value: cellText(row, c) }; });   // 列がある表だけ
+    v[SUB.file] = { value: ((row.value[SUB.file] && row.value[SUB.file].value) || []).map(function (f) { return { fileKey: f.fileKey }; }) };
+    if (row.value[SUB.pdf]) v[SUB.pdf] = { value: (row.value[SUB.pdf].value || []).map(function (f) { return { fileKey: f.fileKey }; }) };
+    return { id: row.id, value: v };
+  }
+  function isoToday() { var d = new Date(); return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
+  function openStored(ex) {
+    if (ex.data) { saveAs(ex.data, ex.filename); return Promise.resolve(ex.filename); }
+    if (!ex.file) return Promise.reject(new Error('保存された書類のファイルが見つかりません'));
+    return download(ex.file.fileKey).then(function (buf) { saveAs(buf, ex.file.name); return ex.file.name; });
+  }
+
+  // 書類1通を、案件の「書類保管」表に、1行足して保存する（作成も、修正版の登録も、ここを通る）
+  function storeRow(record, ctx, docName, stage, version, filename, data) {
+    return upload(data, filename).then(function (fileKey) {
+      var row = { value: {} };
+      row.value[SUB.name] = { value: docName };
+      row.value[SUB.stage] = { value: stage };
+      row.value[SUB.version] = { value: String(version) };
+      row.value[SUB.at] = { value: isoToday() };
+      row.value[SUB.file] = { value: [{ fileKey: fileKey }] };
+      var update = {};
+      update[SUB.table] = { value: rowsOf(record).map(keepRow).concat([row]) };
+      // revision を付けて更新する：読んだあとに別の人が案件を更新していたら、上書きせずに失敗する
+      return api('PUT', '/k/v1/record', { app: appApi.getId(), id: ctx.projectId, revision: record.$revision.value, record: update }).then(function () {
+        return { filename: filename, version: version, data: data };
+      }, function (e) {
+        if (e && e.code === 'GAIA_CO02') throw new Error('別の人が同時に、この案件を更新しました。もう一度押してください');
+        throw e;
       });
     });
   }
-  // 保存の直前にもう一度、最新の版を確かめる（同時に別の人が作ったときに、同じ版が2つできないように）
-  function latestVersion(appId, projectId, docName) {
-    var q = DF.projectId + ' = ' + Number(projectId) + ' and ' + DF.name + ' = ' + quote(docName) + ' order by ' + DF.version + ' desc limit 1';
-    return api('GET', '/k/v1/records', { app: appId, query: q, fields: ['$id', DF.version] }).then(function (r) {
-      return r.records.length ? Number(r.records[0][DF.version].value || 0) : 0;
-    });
-  }
-  function docUrl(appId, id) { return location.origin + '/k/' + (isMobile ? 'm/' : '') + appId + '/show' + (isMobile ? '?record=' + id : '#record=' + id); }
 
-  function createDoc(masterRec, ctx) {
+  function createDoc(masterRec, ctx, extra) {
     var docName = fieldText(masterRec[MF.name]);
     var files = masterRec[MF.template].value;
     if (!files || !files.length) return Promise.reject(new Error('「' + docName + '」の雛形が書類マスタに登録されていません'));
     var tpl = files[0];
     var ext = ((tpl.name.match(/\.([^.]+)$/) || [])[1] || '').toLowerCase();
 
-    return findAppId(APP_NAMES.docs).then(function (docsAppId) {
-      return Promise.all([download(tpl.fileKey), latestVersion(docsAppId, ctx.projectId, docName)]).then(function (res) {
-        var version = res[1] + 1;
-        var values = Object.assign({}, ctx.values, { '版': 'v' + version, '書類名': docName });
-        return fillTemplate(JSZip, res[0], ext, values).then(function (out) {
-          var filename = buildFilename(ctx.projectName, docName, version, ext);
-          return upload(out.data, filename).then(function (fileKey) {
-            var rec = {};
-            rec[DF.projectId] = { value: String(ctx.projectId) };
-            rec[DF.name] = { value: docName };
-            rec[DF.stage] = { value: fieldText(masterRec[MF.stage]) };
-            rec[DF.version] = { value: String(version) };
-            rec[DF.file] = { value: [{ fileKey: fileKey }] };
-            return api('POST', '/k/v1/record', { app: docsAppId, record: rec }).then(function (r) {
-              return { filename: filename, id: r.id, version: version, unknown: out.unknown, data: out.data };
-            });
-          });
+    // 保存の直前に、案件を読み直して最新の版を確かめる（同時に別の人が作ったときに、同じ版が2つできないように）
+    return Promise.all([projectRecord(ctx.projectId), download(tpl.fileKey)]).then(function (res) {
+      var record = res[0], cur = existingOf(record)[docName];
+      var version = (cur ? cur.version : 0) + 1;
+      var blank = {}; ASK.forEach(function (a) { blank[a.key] = askDefault(a); });   // 入力されなかった項目の言葉（なければ空のまま入れて、あとで知らせる）
+      var values = Object.assign(blank, ctx.values, extra || {}, { '版': 'v' + version, '書類名': docName });
+      return fillTemplate(JSZip, res[1], ext, values).then(function (out) {
+        var filename = buildFilename(ctx.projectName, docName, version, ext);
+        return storeRow(record, ctx, docName, fieldText(masterRec[MF.stage]), version, filename, out.data).then(function (r) {
+          r.unknown = out.unknown; r.empty = out.empty;
+          return r;
         });
       });
+    });
+  }
+
+  // 修正したファイルを、次の版（v2, v3…）として登録する（担当者が書類を開いて直し、その直したファイルを戻す）
+  function registerRevision(masterRec, file, ctx) {
+    var docName = fieldText(masterRec[MF.name]);
+    var ext = extOf(file.name);
+    if (!ext) return Promise.reject(new Error('ファイルの種類（.docx など）が分かりません'));
+    return Promise.all([projectRecord(ctx.projectId), readFile(file)]).then(function (res) {
+      var record = res[0], cur = existingOf(record)[docName];
+      var version = (cur ? cur.version : 0) + 1;
+      return storeRow(record, ctx, docName, fieldText(masterRec[MF.stage]), version, buildFilename(ctx.projectName, docName, version, ext), res[1]);
+    });
+  }
+  // 書類保管の、指定した書類の最新版の行を、書き換えて保存する（change は、行の値を直接書き換える関数）
+  function updateRows(ctx, names, change) {
+    return projectRecord(ctx.projectId).then(function (record) {
+      var ex = existingOf(record), ids = {};
+      names.forEach(function (n) { if (!ex[n]) throw new Error('「' + n + '」は、まだ保存されていません'); ids[ex[n].rowId] = n; });
+      var rows = rowsOf(record).map(keepRow);
+      rows.forEach(function (r) { if (ids[r.id]) change(r, ids[r.id]); });
+      var update = {}; update[SUB.table] = { value: rows };
+      return api('PUT', '/k/v1/record', { app: appApi.getId(), id: ctx.projectId, revision: record.$revision.value, record: update }).catch(function (e) {
+        if (e && e.code === 'GAIA_CO02') throw new Error('別の人が同時に、この案件を更新しました。もう一度押してください');
+        throw e;
+      });
+    });
+  }
+  // 書類関係の承認：承認者（開いた人）と日時を、書類保管の行に残す。新しい版を作ると、承認は、外れる（新しい行には、承認がないため）
+  function approveDocs(ctx, names) {
+    var who = loginName() || '（不明）', now = new Date().toISOString();
+    return updateRows(ctx, names, function (r) {
+      r.value[SUB.status] = { value: APPROVED }; r.value[SUB.by] = { value: who }; r.value[SUB.approvedAt] = { value: now };
+    }).then(function () { return { who: who, at: now }; });
+  }
+  // PDF化：承認済みの書類を、PDF化サーバー（pdf-server/）で変換して、同じ行の「PDF」に保存する
+  function convertToPdf(ctx, name, ex, force) {   // force：議事録を保存するときの、自動のPDF化（承認は、待たない）
+    if (!PDF_SERVER_URL) return Promise.reject(new Error('PDF化サーバーが、まだ設定されていません（doc-button.js の PDF_SERVER_URL）'));
+    if (!ex.approved && !force) return Promise.reject(new Error('承認されていない書類は、PDF化しません'));
+    var ext = extOf((ex.file && ex.file.name) || ex.filename || '');
+    return (ex.data ? Promise.resolve(ex.data) : download(ex.file.fileKey)).then(function (buf) {
+      return fetch(PDF_SERVER_URL.replace(/\/$/, '') + '/convert?ext=' + encodeURIComponent(ext), { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: buf });
+    }).then(function (r) {
+      if (!r.ok) throw new Error('PDF化に失敗しました（サーバーの返事：' + r.status + '）');
+      return r.arrayBuffer();
+    }).then(function (pdf) {
+      var head = String.fromCharCode.apply(null, new Uint8Array(pdf.slice(0, 5)));
+      if (head !== '%PDF-') throw new Error('PDFではないものが返ってきました。保存しませんでした');
+      var base = ((ex.file && ex.file.name) || ex.filename || name).replace(/\.[^.]+$/, '');
+      return upload(pdf, base + '.pdf').then(function (fileKey) {
+        return updateRows(ctx, [name], function (r) { r.value[SUB.pdf] = { value: [{ fileKey: fileKey }] }; }).then(function () { return { name: base + '.pdf', data: pdf }; });
+      });
+    });
+  }
+  function readFile(file) {
+    return new Promise(function (resolve, reject) {
+      var fr = new FileReader();
+      fr.onload = function () { resolve(fr.result); };
+      fr.onerror = function () { reject(new Error('ファイルを読み込めませんでした')); };
+      fr.readAsArrayBuffer(file);
     });
   }
 
@@ -331,14 +785,20 @@
   function targetOf(r) { var t = r[MF.target] ? fieldText(r[MF.target]) : ''; return t === '共通' ? '' : t; }
   function matchTarget(r, sel) { var t = targetOf(r); return !t || !sel || t === sel; }
   function hasTemplate(r) { return !!(r[MF.template] && r[MF.template].value && r[MF.template].value.length); }
-  function unknownNote(list) { return list && list.length ? '\n置き換えできずに残った項目（名前が違う、または {{ }} が段落・セルをまたいでいます）：' + list.map(function (n) { return '{{' + n + '}}'; }).join(' ') : ''; }
+  function unknownNote(list, empty) {
+    var t = '';
+    if (list && list.length) t += '\n置き換えできずに残った項目（名前が違う、または {{ }} が段落・セルをまたいでいます）：' + list.map(function (n) { return '{{' + n + '}}'; }).join(' ');
+    // 書類のチェック（外部には送らず、この画面の中だけで行う）：案件くんの値が空のまま入った項目
+    if (empty && empty.length) t += '\n案件くんの値が空のまま入った項目（案件くんに入力してから、作り直してください）：' + empty.map(function (n) { return '{{' + n + '}}'; }).join(' ');
+    return t;
+  }
 
   function openPanel(ctx) {
     var overlay = el('div', 'position:fixed;left:0;top:0;right:0;bottom:0;background:rgba(0,0,0,.45);z-index:10000;overflow:auto;-webkit-overflow-scrolling:touch');
     var box = el('div', 'background:#fff;max-width:720px;margin:24px auto;border-radius:8px;padding:16px;font-size:14px;box-sizing:border-box;width:calc(100% - 24px)');
     var head = el('div', 'display:flex;justify-content:space-between;align-items:center;margin-bottom:10px');
     head.appendChild(el('div', 'font-weight:bold;font-size:17px', '工程別の書類：' + ctx.projectName));
-    var close = el('button', 'padding:6px 12px;font-size:14px;cursor:pointer', '閉じる'); close.type = 'button';
+    var close = el('button', 'padding:6px 12px;font-size:14px;cursor:pointer;white-space:nowrap;flex:none;margin-left:10px', '閉じる'); close.type = 'button';
     close.addEventListener('click', function () { document.body.removeChild(overlay); });
     head.appendChild(close);
     box.appendChild(head);
@@ -347,9 +807,9 @@
     overlay.appendChild(box);
     document.body.appendChild(overlay);
 
-    var masters = [], existing = {}, docsAppId = 0;
-    Promise.all([loadMaster(), loadExisting(ctx.projectId), findAppId(APP_NAMES.docs)]).then(function (res) {
-      masters = res[0]; existing = res[1]; docsAppId = res[2];
+    var masters = [], existing = {};
+    Promise.all([loadMaster(), projectRecord(ctx.projectId)]).then(function (res) {
+      masters = res[0]; existing = existingOf(res[1]);
       build();
     }).catch(function (e) { body.textContent = ''; body.appendChild(el('div', 'color:#c0392b', '読み込めませんでした：' + ((e && e.message) || ''))); });
 
@@ -371,7 +831,16 @@
       else if (targets.indexOf(ctx.guessedTarget) >= 0) { tgtSel.value = ctx.guessedTarget; autoNote = '対象は、案件名から「' + ctx.guessedTarget + '」と判断して選びました。違うときは選び直してください。'; }
       var bar = el('div'); bar.appendChild(stageSel); if (auds.length) bar.appendChild(audSel); if (targets.length) bar.appendChild(tgtSel);
       var batch = el('button', 'padding:6px 12px;font-size:13px;cursor:pointer;margin-bottom:8px', 'この工程をまとめて作成'); batch.type = 'button';
-      bar.appendChild(batch);
+      var batchAll = el('button', 'padding:6px 12px;font-size:13px;cursor:pointer;margin-bottom:8px;margin-left:8px', '全工程をまとめて作成'); batchAll.type = 'button';
+      bar.appendChild(batch); bar.appendChild(batchAll);
+      if (ctx.caps && ctx.caps.approval) {
+        var approveAll = el('button', 'padding:6px 12px;font-size:13px;cursor:pointer;margin-bottom:8px;margin-left:8px;font-weight:bold', '書類一式を承認'); approveAll.type = 'button';
+        approveAll.addEventListener('click', function () {
+          var names = Object.keys(existing).filter(function (n) { return !existing[n].approved; });
+          approveNames(names, '未承認の書類');
+        });
+        bar.appendChild(approveAll);
+      }
       var list = el('div'), msg = el('div', 'margin-top:8px;font-size:13px;white-space:pre-line');
       if (autoNote && targets.length) bar.appendChild(el('div', 'font-size:12px;color:#666;margin-bottom:6px', autoNote));
       body.appendChild(bar); body.appendChild(list); body.appendChild(msg);
@@ -388,7 +857,12 @@
         });
       }
       function setMsg(t, err) { msg.textContent = t; msg.style.color = err ? '#c0392b' : '#1f7a3d'; }
-      function reloadSoon(t) { setMsg(t + '（画面を更新します）', false); setTimeout(function () { location.reload(); }, 2500); }
+      // 注意（置き換えできなかった項目・空の項目）があるときは、読めるように、画面を自動では更新しない
+      function reloadSoon(t, stay) {
+        if (isMobile && !stay) { pendingReload = true; setMsg(t + '（内容を閉じると、画面が更新されます）', false); setTimeout(function () { if (pendingReload && !document.querySelector('[data-doc-text]')) location.reload(); }, 8000); return; }
+        if (stay) { setMsg(t + '\n（保存はできています。内容を確認してください。案件の「書類保管」表は、画面を開き直すと更新されます）', true); batch.disabled = false; batchAll.disabled = false; updateStageLabels(); show(); return; }
+        setMsg(t + '（画面を更新します）', false); setTimeout(function () { location.reload(); }, 2500);
+      }
       function shown() {
         return masters.filter(function (r) {
           if (fieldText(r[MF.stage]) !== stageSel.value) return false;
@@ -396,11 +870,185 @@
         });
       }
       // 作成に成功したら、画面上の「最新 vN」もその場で更新する（まとめ作成が途中で失敗しても、再実行で二重に作らない）
-      function makeOne(rec) {
-        return createDoc(rec, ctx).then(function (r) {
-          existing[fieldText(rec[MF.name])] = { version: r.version, id: r.id };
+      function makeOne(rec, extra) {
+        return createDoc(rec, ctx, extra).then(function (r) {
+          existing[fieldText(rec[MF.name])] = { version: r.version, filename: r.filename, data: r.data };
           return r;
         });
+      }
+      // 議事録などの入力欄（雛形に {{打合せ日}} {{議事録メモ}} などがあるときだけ出す）
+      // Microsoft Copilot に渡す依頼文（コピーして、Copilot のチャットに貼り、続けて、文字起こしを貼る）。結果は、見出し付きになるので、そのまま貼り付けて「かんたん整理」で、入力欄に入る
+  var COPILOT_PROMPT = '以下は、打合せの音声の文字起こしです。次の見出しで、箇条書きにまとめてください。分からない項目は、空にしてください。書かれていないことは、作らないでください。「えー」「あの」などは、取り除いてください。\n【出席者】\n【場所】\n【議題】\n【打合せ内容】\n【決定事項】\n【ToDo】（「期限｜担当｜内容」の形で、1行に1つ。例：10/25｜太田｜見積を出す）\n【次回予定】\n\n【文字起こし】\n';
+  var COPILOT_URL = 'https://m365.cloud.microsoft/chat';   // Microsoft 365 Copilot のチャット（会社の契約。開けなければ、ここを直す）
+  var MINUTES_SERVER_URL = 'https://ts-pdf-server.onrender.com';   // AIで議事録を整理するサーバーのURL（pdf-server の /minutes）。空のとき、または、サーバーに鍵が入っていないあいだは、「AIで整理」は押せない
+  function askValues(asks, name) {
+        return new Promise(function (resolve) {
+          var cover = el('div', 'position:fixed;left:0;top:0;right:0;bottom:0;background:rgba(0,0,0,.45);z-index:10001;overflow:auto');
+          var card = el('div', 'background:#fff;max-width:640px;margin:24px auto;border-radius:8px;padding:16px;font-size:14px;box-sizing:border-box;width:calc(100% - 24px)');
+          card.appendChild(el('div', 'font-weight:bold;font-size:16px;margin-bottom:10px', '「' + name + '」の内容'));
+          var inputs = {};
+          var sortBox = el('div', 'margin:6px 0 8px;display:none');   // 仕分け画面（まちがいを、1行ずつ、直す）
+          sortBox.setAttribute('data-sort', '1');
+          var single = asks.some(function (a) { return a.key === '議事録本文'; });   // 議事録本文：ひとつの四角に、見出し付きで、まとめて入れる
+          var isMinutes = single || asks.some(function (a) { return a.key === '議事録メモ'; });
+          var shown = single ? asks.filter(function (a) { return a.key === '議事録本文'; }) : asks;   // 打合せ日・作成者などは、入力欄を出さず、自動で入れる
+          // 仕分け画面：整理の結果を、項目ごとにまとめて出す（色つきのカード）。直したい行を、タップすると、項目の移動・文の修正・削除ができる
+          var sortItems = [];
+          var COLORS = { '出席者': '#2f6fb5', '場所': '#1f8a8a', '議題': '#7a4fb3', '議事録メモ': '#6b7280', '決定事項': '#2e8b57', 'ToDo': '#d9822b', '次回予定': '#a0642d' };
+          var sortSync = function () { inputs['議事録本文'].value = formatMinutes(sortResOf(sortItems)); };
+          function openSortSheet(it) {
+            var cover = el('div', 'position:fixed;left:0;top:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:10003;overflow:auto'); cover.setAttribute('data-sort-sheet', '1');
+            var sheet = el('div', 'background:#fff;margin:24px 12px;border-radius:8px;padding:14px;max-width:560px;box-sizing:border-box;margin-left:auto;margin-right:auto;width:calc(100% - 24px)');
+            sheet.appendChild(el('div', 'font-weight:bold;font-size:' + (isMobile ? '16px' : '15px') + ';margin-bottom:6px', '文を直す'));
+            var ta = el('textarea', 'width:100%;box-sizing:border-box;font-size:' + (isMobile ? '17px' : '15px') + ';line-height:1.6;padding:8px;border:1px solid #c9d0d9;border-radius:4px;min-height:84px'); ta.value = it.text; ta.setAttribute('data-sort-text', '1'); sheet.appendChild(ta);
+            sheet.appendChild(el('div', 'font-weight:bold;font-size:' + (isMobile ? '16px' : '15px') + ';margin:12px 0 6px', 'どの項目に入れますか'));
+            var grid = el('div', 'display:flex;flex-wrap:wrap;gap:8px');
+            var done = function () { it.text = ta.value; document.body.removeChild(cover); sortSync(); drawSort(false); };
+            SORT_CATS.forEach(function (c) {
+              var on = c[0] === it.cat, col = COLORS[c[0]];
+              var b = el('button', 'padding:' + (isMobile ? '12px 14px' : '8px 12px') + ';font-size:' + (isMobile ? '16px' : '14px') + ';font-weight:bold;cursor:pointer;border-radius:6px;border:2px solid ' + col + ';' + (on ? 'background:' + col + ';color:#fff' : 'background:#fff;color:' + col), c[1]); b.type = 'button'; b.setAttribute('data-sort-cat', c[0]);
+              b.addEventListener('click', function () { it.cat = c[0]; done(); });
+              grid.appendChild(b);
+            });
+            sheet.appendChild(grid);
+            var bar = el('div', 'display:flex;gap:10px;justify-content:space-between;margin-top:16px');
+            var del = el('button', 'padding:' + (isMobile ? '12px 16px' : '8px 14px') + ';font-size:' + (isMobile ? '16px' : '14px') + ';cursor:pointer;border:1px solid #c0392b;color:#c0392b;background:#fff;border-radius:6px', 'この行を消す'); del.type = 'button'; del.setAttribute('data-sort-del', '1');
+            del.addEventListener('click', function () { ta.value = ''; done(); });
+            var ok = el('button', 'padding:' + (isMobile ? '12px 24px' : '8px 20px') + ';font-size:' + (isMobile ? '16px' : '14px') + ';font-weight:bold;cursor:pointer;border:0;background:#0b5fb8;color:#fff;border-radius:6px', '決定'); ok.type = 'button'; ok.setAttribute('data-sort-ok', '1');
+            ok.addEventListener('click', done);
+            bar.appendChild(del); bar.appendChild(ok); sheet.appendChild(bar); cover.appendChild(sheet); document.body.appendChild(cover);
+          }
+          function drawSort(scroll) {
+            sortBox.textContent = '';
+            var live = sortItems.filter(function (it) { return it.text.trim(); });
+            if (!inputs['議事録本文'] || !live.length) { sortBox.style.display = 'none'; return; }
+            sortBox.style.display = 'block';
+            sortBox.appendChild(el('div', 'font-size:' + (isMobile ? '17px' : '15px') + ';font-weight:bold;color:#1f3a6e;margin-bottom:2px', '仕分け（直したい行を、タップ）'));
+            sortBox.appendChild(el('div', 'font-size:' + (isMobile ? '14px' : '12px') + ';color:#555;margin-bottom:6px', '項目の移動・文の直し・削除ができます。直すと、下の③に反映されます。'));
+            SORT_CATS.forEach(function (c) {
+              var list = live.filter(function (it) { return it.cat === c[0]; }); if (!list.length) return;
+              var card = el('div', 'margin:8px 0;border:1px solid #d9dee5;border-left:6px solid ' + COLORS[c[0]] + ';border-radius:6px;background:#fff');
+              card.appendChild(el('div', 'padding:6px 10px;font-weight:bold;font-size:' + (isMobile ? '16px' : '14px') + ';color:' + COLORS[c[0]], c[1]));
+              list.forEach(function (it) {
+                var line = el('div', 'display:flex;gap:8px;align-items:center;padding:' + (isMobile ? '12px 10px' : '8px 10px') + ';border-top:1px solid #eef0f3;font-size:' + (isMobile ? '17px' : '15px') + ';line-height:1.6;cursor:pointer;word-break:break-all');
+                line.setAttribute('data-sort-row', String(sortItems.indexOf(it)));
+                line.appendChild(el('div', 'flex:1 1 auto', it.text)); line.appendChild(el('div', 'flex:0 0 auto;color:#999;font-size:20px', '›'));
+                line.addEventListener('click', function () { openSortSheet(it); });
+                card.appendChild(line);
+              });
+              sortBox.appendChild(card);
+            });
+            if (scroll && sortBox.scrollIntoView) setTimeout(function () { try { sortBox.scrollIntoView({ block: 'start', behavior: 'smooth' }); } catch (e) {} }, 50);   // 整理したら、仕分けの場所へ、画面を動かす
+          }
+          function renderSort(res) { sortItems = sortItemsOf(res); drawSort(true); }
+          var fillFrom = function (res) {
+            if (inputs['議事録本文']) { inputs['議事録本文'].value = formatMinutes(res); renderSort(res); return; }
+            Object.keys(res).forEach(function (key) { if (inputs[key] && res[key]) inputs[key].value = res[key]; });
+          };
+          if (isMinutes) {
+            card.appendChild(el('div', 'font-size:14px;font-weight:bold;color:#1f3a6e;margin-top:4px', '① 音声の文字起こしを、ここに貼り付けます'));
+            // 録音のコツ：見出しの言葉を声に出すと、AIなしで、ほぼ正確に分かれる
+            var guide = el('details', 'margin:4px 0 6px;font-size:12px;color:#444;background:#f3f7fb;border:1px solid #d5e1ee;border-radius:6px;padding:4px 8px');
+            guide.setAttribute('data-guide', '1');
+            guide.appendChild(el('summary', 'cursor:pointer;font-weight:bold', '録音のコツ（この順に話すと、ほぼ自動で分かれます）'));
+            guide.appendChild(el('div', 'margin-top:4px;line-height:1.7', '「出席者は、〇〇さんと△△さんです」→「場所は、〇〇です」→「議題は、〇〇、△△です」→（内容は、ふつうに話す）→「決まったことは、〇〇、△△です」→「宿題は、10月25日までに、〇〇さんが、△△を出します」→「次回は、11月1日、〇〇です」'));
+            card.appendChild(guide);
+            var src = el('textarea', 'width:100%;height:300px;box-sizing:border-box;font-size:14px;padding:8px;margin-top:4px;line-height:1.5;background:#f7fafc'); src.setAttribute('data-minutes-src', '1');
+            card.appendChild(src);
+            // Copilot を使う場合：①依頼文をコピー → ②Copilot を開く → 依頼文と、文字起こしを貼る → できた文章を、上の欄に貼る → 「かんたん整理」
+            var cop = el('div', 'margin:6px 0 2px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-size:12px');
+            cop.appendChild(el('span', 'color:#666', 'Copilotを使う場合：'));
+            // 1つのボタンで、依頼文と文字起こしを、コピーして、Copilotを開く（貼り付けて、送るだけにする）
+            var copy = el('button', 'padding:' + (isMobile ? '10px 12px' : '5px 9px') + ';font-size:' + (isMobile ? '14px' : '12px') + ';cursor:pointer;font-weight:bold', 'Copilotで整理（コピーして開く）'); copy.type = 'button';
+            copy.addEventListener('click', function () {
+              if (!src.value.trim()) { note.style.color = '#c0392b'; note.textContent = '先に、①の枠に、文字起こしを貼ってください'; return; }
+              note.style.color = '#1f7a3d';
+              var text = COPILOT_PROMPT + src.value.trim();
+              var next = '【次】Copilotのチャットに、貼り付けて、送ってください。できた文章を、コピーして、この画面に戻り、' + (single ? '下の③の枠に、貼り付けます（「かんたん整理」は、押さなくて大丈夫です）。' : '上の①の枠に、貼って、「かんたん整理」を押します。');
+              // 同期で、コピー→開く（スマホで、開くのを止められないように、押した直後に、行う）
+              var ok = false;
+              var t = document.createElement('textarea'); t.value = text; t.style.cssText = 'position:fixed;left:0;top:0;opacity:0'; document.body.appendChild(t); t.select();
+              try { ok = document.execCommand('copy'); } catch (e) { ok = false; } document.body.removeChild(t);
+              if (ok) { note.textContent = 'コピーしました。' + next; window.open(COPILOT_URL, '_blank', 'noopener'); return; }
+              if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(function () { note.textContent = 'コピーしました。' + next; window.open(COPILOT_URL, '_blank', 'noopener'); }, function () { note.style.color = '#c0392b'; note.textContent = 'コピーできませんでした。'; });
+              else { note.style.color = '#c0392b'; note.textContent = 'コピーできませんでした。'; }
+            });
+            cop.appendChild(copy); card.appendChild(cop);
+            var tools = el('div', 'margin:4px 0 8px;display:flex;gap:8px;flex-wrap:wrap;align-items:center');
+            var easy = el('button', 'padding:6px 10px;font-size:12px;cursor:pointer', 'かんたん整理（外部に送りません）'); easy.type = 'button';
+            easy.addEventListener('click', function () { fillFrom(summarizeLocal(src.value)); note.textContent = '簡易に分けました。内容を、確認・修正してください。'; });
+            var ai = el('button', 'padding:6px 10px;font-size:12px;cursor:pointer;font-weight:bold', MINUTES_SERVER_URL ? 'AIで整理（確認中…）' : 'AIで整理（未設定）'); ai.type = 'button'; ai.disabled = true;
+            // サーバーに、AIの鍵が入っているときだけ、押せるようにする（鍵が無い・サーバーに届かないときは、「未設定」のまま）
+            if (MINUTES_SERVER_URL) fetch(MINUTES_SERVER_URL.replace(/\/$/, '') + '/minutes/status').then(function (r) { return r.ok ? r.json() : { ready: false }; }).catch(function () { return { ready: false }; }).then(function (j) { if (j && j.ready) { ai.disabled = false; ai.textContent = 'AIで整理（外部のAIに送ります）'; } else { ai.textContent = 'AIで整理（未設定）'; } });
+            var note = el('span', 'font-size:12px;color:#1f7a3d');
+            var extra = el('input', 'width:100%;box-sizing:border-box;font-size:12px;padding:4px;margin-bottom:4px'); extra.type = 'text'; extra.placeholder = 'AIに送らず、伏せたい言葉（コンマ区切り。例：会社名、物件名）'; extra.setAttribute('data-mask-extra', '1');
+            card.appendChild(el('div', 'font-size:14px;font-weight:bold;color:#1f3a6e;margin-top:8px', '② 下のボタンで、整理します（整理した結果は、③に入ります）'));
+            card.appendChild(extra);
+            ai.addEventListener('click', function () {
+              if (!src.value.trim()) { note.textContent = '文字起こしを、貼り付けてください'; return; }
+              var mk = maskForAI(src.value, extra.value.split(/[,、，]/).map(function (x) { return x.trim(); }));
+              var preview = mk.masked.length > 400 ? mk.masked.slice(0, 400) + '…（以下、省略）' : mk.masked;
+              if (!confirm('次の内容を、外部のAIに送って、整理します（電話番号・メール・金額・「〇〇さん」の名前などは、符号に置き換えて、送ります。結果は、元の言葉に戻します）。\n\n【送る内容】\n' + preview + '\n\nよろしいですか？')) return;
+              ai.disabled = true; note.textContent = 'AIが、整理しています…';
+              fetch(MINUTES_SERVER_URL.replace(/\/$/, '') + '/minutes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: mk.masked }) })
+                .then(function (r) { if (!r.ok) throw new Error('AIの整理に失敗しました（' + r.status + '）'); return r.json(); })
+                .then(function (res) { Object.keys(res).forEach(function (k) { res[k] = mk.unmask(res[k]); }); fillFrom(res); ai.disabled = false; note.textContent = 'AIが分けました（置き換えた言葉 ' + mk.count + ' 個は、元に戻しました）。内容を、確認・修正してください（AIの案です。間違いが、含まれる可能性があります）。'; })
+                .catch(function (e) { ai.disabled = false; note.style.color = '#c0392b'; note.textContent = (e && e.message) || 'AIの整理に失敗しました'; });
+            });
+            if (single) {   // Copilotなどの返事を、③に貼ったあとでも、仕分け画面で、1行ずつ直せる
+              var resort = el('button', 'padding:' + (isMobile ? '10px 12px' : '6px 10px') + ';font-size:' + (isMobile ? '14px' : '12px') + ';cursor:pointer', '③を、仕分けで直す'); resort.type = 'button'; resort.setAttribute('data-resort', '1');
+              resort.addEventListener('click', function () { var v = inputs['議事録本文'] && inputs['議事録本文'].value; if (!v || !v.trim()) { note.style.color = '#c0392b'; note.textContent = '③の枠が、空です'; return; } renderSort(summarizeByHeadings(v) || summarizeLocal(v)); note.style.color = '#1f7a3d'; note.textContent = '③の内容を、仕分けに出しました'; });
+              tools.appendChild(resort);
+            }
+            tools.appendChild(easy); tools.appendChild(ai); tools.appendChild(note); card.appendChild(tools);
+            card.appendChild(sortBox);
+          }
+          shown.forEach(function (a) {
+            card.appendChild(el('div', a.key === '議事録本文' ? 'font-size:14px;font-weight:bold;color:#1f3a6e;margin-top:8px' : 'font-size:12px;color:#666;margin-top:8px', a.label));
+            var inp = a.type === 'doc' ? el('textarea', 'width:100%;height:150px;box-sizing:border-box;font-size:14px;padding:8px;line-height:1.5') : a.type === 'memo' ? el('textarea', 'width:100%;height:160px;box-sizing:border-box;font-size:14px;padding:6px') : el('input', 'width:100%;box-sizing:border-box;font-size:14px;padding:6px');
+            if (a.type === 'date') { inp.type = 'date'; inp.value = isoToday(); } else if (a.type === 'text') { inp.type = 'text'; if (a.init) inp.value = a.init(); }
+            inp.setAttribute('data-ask', a.key); inputs[a.key] = inp; card.appendChild(inp);
+            if (a.key === '議事録本文') inp.addEventListener('paste', function () { setTimeout(function () { var c = canonicalMinutes(inp.value); if (c !== inp.value) { inp.value = c; note.style.color = '#1f7a3d'; note.textContent = '貼り付けた文章を、見出し（【出席者】など）の形に、整えました。内容を確認してください。'; } }, 0); });   // Copilotの返事（太字・表）を、貼ったとき、自動で整える
+          });
+          var bar = el('div', 'margin-top:12px;display:flex;gap:8px;justify-content:flex-end');
+          var cancel = el('button', 'padding:8px 14px;cursor:pointer', 'やめる'); cancel.type = 'button';
+          var ok = el('button', 'padding:8px 14px;cursor:pointer;font-weight:bold', '作成して保存'); ok.type = 'button';
+          function close(v) { document.body.removeChild(cover); resolve(v); }
+          cancel.addEventListener('click', function () { close(null); });
+          ok.addEventListener('click', function () {
+            var v = {};
+            asks.forEach(function (a) {
+              if (!inputs[a.key]) { v[a.key] = askDefault(a); return; }   // 入力欄を出さなかった項目は、初期値（打合せ日は今日、作成者は開いた人）
+              var t = inputs[a.key].value;
+              if (a.type === 'date') { var m = t.match(/^(\d{4})-(\d{2})-(\d{2})$/); t = m ? m[1] + '年' + Number(m[2]) + '月' + Number(m[3]) + '日' : t; }
+              v[a.key] = a.type === 'memo' ? tidyMemo(t) : a.type === 'doc' ? canonicalMinutes(t).replace(/\s+$/, '') : t.trim();
+              if (!v[a.key]) v[a.key] = askDefault(a);
+            });
+            close(v);
+          });
+          bar.appendChild(cancel); bar.appendChild(ok); card.appendChild(bar); cover.appendChild(card); document.body.appendChild(cover);
+        });
+      }
+      // 保存した最新の書類を、ダウンロードする前に確認する（外部には送りません）。指摘のリストを返す
+      function checkOne(name) {
+        var cur = existing[name];
+        return (cur.data ? Promise.resolve(cur.data) : download(cur.file.fileKey)).then(function (buf) {
+          return extractText(JSZip, buf, extOf(cur.filename || (cur.file && cur.file.name) || ''));
+        }).then(function (text) { return checkText(text, ctx.values); });
+      }
+      function approveNames(names, label) {
+        if (!names.length) { setMsg('承認する書類が、ありません', true); return; }
+        setMsg('承認の前に、書類をチェックしています…', false);
+        names.reduce(function (p, n) { return p.then(function (acc) { return checkOne(n).then(function (f) { acc[n] = f; return acc; }); }); }, Promise.resolve({})).then(function (found) {
+          var bad = names.filter(function (n) { return found[n].length; });
+          var msgText = label + '（' + names.length + '件）を、承認します。承認者：' + (loginName() || '（不明）') + '\n' +
+            (bad.length ? '\n【チェックの指摘があります】\n' + bad.map(function (n) { return '・' + n + '：' + found[n].join(' ／ '); }).join('\n') + '\n\n指摘があっても、承認しますか？' : '\nチェックの指摘は、ありません。承認しますか？');
+          if (!confirm(msgText)) { setMsg('承認は、しませんでした', false); return; }
+          return approveDocs(ctx, names).then(function (r) {
+            names.forEach(function (n) { existing[n].approved = true; existing[n].approver = r.who; existing[n].approvedAt = r.at; });
+            setMsg(names.length + '件を承認しました（' + r.who + '）', false); show();
+          });
+        }).catch(function (e) { setMsg((e && e.message) || '承認できませんでした', true); });
       }
       function makeRow(rec) {
         var name = fieldText(rec[MF.name]), ex = existing[name];
@@ -413,8 +1061,14 @@
         if (ok && kind === 'plain') state.textContent = '雛形のまま使う書類（案件の情報は入れません）';
         else if (ex) {
           state.appendChild(document.createTextNode('最新 v' + ex.version + ' ・ '));
-          var a = el('a', '', '開く'); a.href = docUrl(docsAppId, ex.id); a.target = '_blank'; a.rel = 'noopener';
+          var a = el('a', 'cursor:pointer;text-decoration:underline;color:#1a73e8', '開く'); a.setAttribute('role', 'link');
+          a.addEventListener('click', function () { openStored(existing[name]).catch(function (e) { setMsg((e && e.message) || '開けませんでした', true); }); });
           state.appendChild(a);
+          if (ctx.caps && ctx.caps.approval) {
+            state.appendChild(document.createTextNode(' ・ '));
+            var ap = el('span', ex.approved ? 'color:#1f7a3d;font-weight:bold' : 'color:#a05a00', ex.approved ? '承認済み（' + ex.approver + '・' + String(ex.approvedAt).slice(0, 10) + '）' : '未承認');
+            state.appendChild(ap);
+          }
         } else state.textContent = '未作成';
         left.appendChild(state);
         var label = !ok ? '雛形が未登録' : !kind ? '確認中…' : kind === 'plain' ? '雛形を開く' : ex ? 'v' + (ex.version + 1) + ' を作成' : '作成して保存';
@@ -423,17 +1077,83 @@
         btn.addEventListener('click', function () {
           if (kind === 'plain') {
             btn.disabled = true; setMsg('雛形を取り出しています…', false);
-            openAsIs(rec).then(function (n) { btn.disabled = false; setMsg('雛形のまま保存しました：' + n + '（案件書類には保存していません）', false); })
+            openAsIs(rec).then(function (n) { btn.disabled = false; setMsg('雛形のまま保存しました：' + n + '（案件には保存していません）', false); })
               .catch(function (e) { btn.disabled = false; setMsg((e && e.message) || '取り出せませんでした', true); });
             return;
           }
           var cur = existing[name];
           if (cur && !confirm('「' + name + '」は v' + cur.version + ' まで作成済みです。v' + (cur.version + 1) + ' を作成しますか？')) return;
-          btn.disabled = true; setMsg('作成しています…', false);
-          makeOne(rec).then(function (r) { saveAs(r.data, r.filename); reloadSoon('保存してダウンロードしました：' + r.filename + unknownNote(r.unknown)); })
-            .catch(function (e) { btn.disabled = false; setMsg((e && e.message) || '作成できませんでした', true); });
+          // 作る前に、雛形に入れる案件くんの項目のうち、空のものを知らせる（空のまま作ると、その場所が空欄の書類になるため）
+          var emptyNow = emptyFieldsOf(rec, ctx.values);
+          if (emptyNow.length && !confirm('案件くんで、次の項目が、空です：\n' + emptyNow.join('、') + '\n\nこのままだと、書類の、その場所が、空欄になります。このまま作成しますか？\n（「キャンセル」で、案件くんに入力してから、作れます）')) return;
+          var asks = asksOf(rec);
+          (asks.length ? askValues(asks, name) : Promise.resolve({})).then(function (extra) {
+            if (!extra) return;
+            btn.disabled = true; setMsg('作成しています…', false);
+            return makeOne(rec, extra).then(function (r) {
+              saveAs(r.data, r.filename);
+              var stay = !!((r.unknown && r.unknown.length) || (r.empty && r.empty.length));
+              var base = (isMobile ? '保存しました：' : '保存してダウンロードしました：') + r.filename + unknownNote(r.unknown, r.empty);
+              // 議事録は、保存と同時に、PDFも、案件に自動で保存する（承認は、待たない）
+              var minutesDoc = asks.some(function (a) { return a.key === '議事録本文' || a.key === '議事録メモ'; });
+              if (!(minutesDoc && PDF_SERVER_URL && ctx.caps && ctx.caps.pdf)) { reloadSoon(base, stay); return; }
+              setMsg('保存しました。PDFを作っています…（数秒〜十数秒かかります）', false);
+              return convertToPdf(ctx, name, existing[name], true).then(function () { reloadSoon(base + '\nPDFも保存しました', stay); },
+                function (e) { reloadSoon(base + '\n（PDFは、保存できませんでした：' + ((e && e.message) || '') + '。議事録は、保存できています。承認したあと、「PDF化」で、作れます）', true); });
+            })
+              .catch(function (e) { btn.disabled = false; setMsg((e && e.message) || '作成できませんでした', true); });
+          });
         });
-        row.appendChild(left); row.appendChild(btn);
+        var right = el('div', 'display:flex;flex-direction:column;gap:6px;align-items:stretch');
+        right.appendChild(btn);
+        // 直したファイルを、次の版として登録する（作成済みの書類だけ）
+        if (ex && ok && kind !== 'plain') {
+          var pick = document.createElement('input'); pick.type = 'file'; pick.style.display = 'none'; pick.setAttribute('data-revision', name);
+          var rev = el('button', 'padding:6px 10px;font-size:12px;cursor:pointer', '直したファイルを登録'); rev.type = 'button';
+          rev.addEventListener('click', function () { pick.click(); });
+          pick.addEventListener('change', function () {
+            var f = pick.files && pick.files[0]; if (!f) return;
+            if (!confirm('「' + f.name + '」を、「' + name + '」の v' + (ex.version + 1) + ' として登録しますか？')) { pick.value = ''; return; }
+            rev.disabled = true; setMsg('登録しています…', false);
+            registerRevision(rec, f, ctx).then(function (r) {
+              existing[name] = { version: r.version, filename: r.filename, data: r.data };
+              setMsg('v' + r.version + ' として登録しました：' + r.filename, false); updateStageLabels(); show();
+            }).catch(function (e) { rev.disabled = false; setMsg((e && e.message) || '登録できませんでした', true); });
+          });
+          // 書類のチェック：保存した最新の書類を、ダウンロードする前に、画面の中だけで確認する（外部には送りません）
+          var chk = el('button', 'padding:6px 10px;font-size:12px;cursor:pointer', 'チェック'); chk.type = 'button';
+          chk.addEventListener('click', function () {
+            chk.disabled = true; setMsg('「' + name + '」をチェックしています…', false);
+            checkOne(name).then(function (res) {
+              chk.disabled = false;
+              setMsg(res.length ? '「' + name + '」のチェック結果（' + res.length + '件）：\n・' + res.join('\n・') : '「' + name + '」：問題は見つかりませんでした', res.length > 0);
+            }).catch(function (e) { chk.disabled = false; setMsg((e && e.message) || 'チェックできませんでした', true); });
+          });
+          right.appendChild(chk); right.appendChild(rev); right.appendChild(pick);
+          // 書類関係の承認（承認した人と日時が、書類保管の行に残る。新しい版を作ると、承認は、外れる）
+          if (ctx.caps && ctx.caps.approval && !ex.approved) {
+            var apb = el('button', 'padding:6px 10px;font-size:12px;cursor:pointer;font-weight:bold', '承認'); apb.type = 'button';
+            apb.addEventListener('click', function () { approveNames([name], '「' + name + '」v' + ex.version); });
+            right.appendChild(apb);
+          }
+          // PDF化（承認済みの書類だけ）
+          if (ctx.caps && ctx.caps.pdf && ex.approved) {
+            if (ex.pdf) {
+              var pdfOpen = el('button', 'padding:6px 10px;font-size:12px;cursor:pointer', 'PDFを開く'); pdfOpen.type = 'button';
+              pdfOpen.addEventListener('click', function () { download(ex.pdf.fileKey).then(function (buf) { saveAs(buf, ex.pdf.name); }).catch(function (e) { setMsg((e && e.message) || '開けませんでした', true); }); });
+              right.appendChild(pdfOpen);
+            } else {
+              var pdfb = el('button', 'padding:6px 10px;font-size:12px;cursor:pointer', PDF_SERVER_URL ? 'PDF化' : 'PDF化（サーバー未設定）'); pdfb.type = 'button'; pdfb.disabled = !PDF_SERVER_URL;
+              pdfb.addEventListener('click', function () {
+                pdfb.disabled = true; setMsg('PDF化しています…', false);
+                convertToPdf(ctx, name, existing[name]).then(function (r) { existing[name].pdf = { fileKey: null, name: r.name }; saveAs(r.data, r.name); setMsg('PDFを保存しました：' + r.name + '（画面を開き直すと、「PDFを開く」になります）', false); })
+                  .catch(function (e) { pdfb.disabled = false; setMsg((e && e.message) || 'PDF化できませんでした', true); });
+              });
+              right.appendChild(pdfb);
+            }
+          }
+        }
+        row.appendChild(left); row.appendChild(right);
         return row;
       }
       function show() {
@@ -447,32 +1167,42 @@
           if (hasTemplate(rec) && !kindOf(rec)) inspect(rec).then(function () { if (row.parentNode === list) list.replaceChild(makeRow(rec), row); });
         });
       }
-      batch.addEventListener('click', function () {
-        var withTpl = shown().filter(hasTemplate);
+      // まとめて作成：pick() が返す書類のうち、雛形のあるものを作る。onlyMissing なら、未作成のものだけ（全工程のとき）
+      function runBatch(btn, pick, onlyMissing, scope) {
+        var withTpl = pick().filter(hasTemplate);
         if (!withTpl.length) { setMsg('雛形が登録された書類がありません', true); return; }
-        batch.disabled = true; setMsg('雛形を確認しています…', false);
+        btn.disabled = true; setMsg('雛形を確認しています…', false);
         Promise.all(withTpl.map(inspect)).then(function () {
-          var targets = withTpl.filter(function (r) { return kindOf(r) !== 'plain'; });
-          var asIs = withTpl.length - targets.length;
-          batch.disabled = false; setMsg('', false);
-          if (!targets.length) { setMsg('この工程の書類は、すべて雛形のまま使うものです（各行の「雛形を開く」で取り出せます）', false); return; }
-          if (!confirm(targets.length + '件の書類を作成します。作成済みの書類は次の版として作られます。' + (asIs ? '\n（雛形のまま使う ' + asIs + '件は、作成の対象外です）' : '') + '\nよろしいですか？')) return;
-          batch.disabled = true;
-          var done = [], failed = [], unknown = [];
+          var targets = withTpl.filter(function (r) { return kindOf(r) !== 'plain' && (!onlyMissing || !existing[fieldText(r[MF.name])]); });
+          var asIs = withTpl.filter(function (r) { return kindOf(r) === 'plain'; }).length;
+          btn.disabled = false; setMsg('', false);
+          if (!targets.length) { setMsg(onlyMissing ? scope + 'の書類は、すべて作成済みか、雛形のまま使うものです' : scope + 'の書類は、すべて雛形のまま使うものです（各行の「雛形を開く」で取り出せます）', false); return; }
+          if (!confirm(targets.length + '件の書類を作成します。' + (onlyMissing ? '（作成済みの書類は、作りません）' : '作成済みの書類は次の版として作られます。') + (asIs ? '\n（雛形のまま使う ' + asIs + '件は、作成の対象外です）' : '') + '\nよろしいですか？')) return;
+          btn.disabled = true;
+          var done = [], failed = [], unknown = [], empty = [];
           targets.reduce(function (p, rec) {
             return p.then(function () {
               setMsg('作成中…（' + (done.length + failed.length + 1) + '/' + targets.length + '）', false);
               return makeOne(rec).then(function (r) {
                 done.push(r.filename);
                 (r.unknown || []).forEach(function (n) { if (unknown.indexOf(n) < 0) unknown.push(n); });
+                (r.empty || []).forEach(function (n) { if (empty.indexOf(n) < 0) empty.push(n); });
               }, function (e) { failed.push(fieldText(rec[MF.name]) + '：' + ((e && e.message) || '失敗')); });
             });
           }, Promise.resolve()).then(function () {
             updateStageLabels();
-            if (failed.length) { batch.disabled = false; show(); setMsg('作成 ' + done.length + '件、失敗 ' + failed.length + '件\n' + failed.join('\n') + unknownNote(unknown), true); }
-            else reloadSoon(done.length + '件を保存しました' + unknownNote(unknown));
+            if (failed.length) { btn.disabled = false; show(); setMsg('作成 ' + done.length + '件、失敗 ' + failed.length + '件\n' + failed.join('\n') + unknownNote(unknown, empty), true); }
+            else reloadSoon(done.length + '件を保存しました' + unknownNote(unknown, empty), !!(unknown.length || empty.length));
           });
         });
+      }
+      batch.addEventListener('click', function () { runBatch(batch, shown, false, 'この工程'); });
+      batchAll.addEventListener('click', function () {
+        runBatch(batchAll, function () {
+          return masters.filter(function (r) {
+            return (!audSel.value || ((r[MF.audience] && r[MF.audience].value) || []).indexOf(audSel.value) >= 0) && matchTarget(r, tgtSel.value);
+          });
+        }, true, '全工程');
       });
       stageSel.addEventListener('change', show);
       tgtSel.addEventListener('change', function () { updateStageLabels(); show(); });
@@ -484,25 +1214,185 @@
     }
   }
 
+  // 画面の右下に浮かぶ丸いボタン（書類関係タブの中に置けないときの予備）。マウスを近づけると、文字つきに広がる。いつでも見える
+  var FAB_SIZE = 52;
+  function floatingButton(label, onClick) {
+    var old = document.querySelector('[data-doc-hub]'); if (old && old.parentNode) old.parentNode.removeChild(old);
+    var fab = el('button', 'position:fixed;right:16px;bottom:96px;z-index:9999;height:' + FAB_SIZE + 'px;min-width:' + FAB_SIZE + 'px;border:0;border-radius:' + (FAB_SIZE / 2) + 'px;background:#0b5fb8;color:#fff;box-shadow:0 4px 12px rgba(0,0,0,.35);cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0 14px;font-size:14px;font-weight:bold;overflow:hidden;white-space:nowrap');
+    fab.type = 'button'; fab.setAttribute('data-doc-hub', '1'); fab.setAttribute('aria-label', label);
+    var icon = el('span', 'font-size:22px;line-height:1', '📄');
+    var text = el('span', 'display:inline-block;max-width:0;opacity:0;margin-left:0;transition:max-width .25s,opacity .25s,margin-left .25s', label);
+    fab.appendChild(icon); fab.appendChild(text);
+    function open() { text.style.maxWidth = '160px'; text.style.opacity = '1'; text.style.marginLeft = '8px'; }
+    function close() { text.style.maxWidth = '0'; text.style.opacity = '0'; text.style.marginLeft = '0'; }
+    fab.addEventListener('mouseenter', open); fab.addEventListener('focus', open);
+    fab.addEventListener('mouseleave', close); fab.addEventListener('blur', close);
+    fab.addEventListener('click', onClick);
+    document.body.appendChild(fab);
+    return fab;
+  }
+
+  // ---------- 「書類関係」タブの、すぐ下に置くボタン ----------
+  // 「タブ表示」プラグインが、どの項目を、どのタブに入れているかに、頼りません。タブの並び（タブ名）を見つけて、
+  // 「書類関係」のタブが選ばれている間だけ、その並びの、すぐ下に、ボタンを出します
+  var TAB_NAMES = ['書類関係'];
+  function bgOf(el) {
+    for (var i = 0; el && i < 4; i++, el = el.parentElement) {
+      var c = getComputedStyle(el).backgroundColor;
+      if (c && c !== 'transparent' && !/rgba\(\s*0,\s*0,\s*0,\s*0\s*\)/.test(c)) return c;
+    }
+    return '';
+  }
+  function leafByText(text) {
+    var all = document.querySelectorAll('div,span,td,th,li,a,button,p');
+    for (var i = 0; i < all.length; i++) { if (!all[i].children.length && all[i].textContent.trim() === text) return all[i]; }
+    return null;
+  }
+  function leavesOf(row) {
+    return Array.prototype.filter.call(row.querySelectorAll('div,span,td,th,li,a,button'), function (e) { return !e.children.length && e.textContent.trim(); });
+  }
+  // タブの並びを探す：「書類関係」の文字を持つ要素と、その並び全体（「工事部」「施工店」も入っている、いちばん内側の枠）
+  function findTabBar() {
+    for (var n = 0; n < TAB_NAMES.length; n++) {
+      var me = leafByText(TAB_NAMES[n]); if (!me) continue;
+      var row = me.parentElement;
+      for (var i = 0; row && i < 5; i++, row = row.parentElement) {
+        var t = row.textContent;
+        if (t.indexOf('工事部') >= 0 && t.indexOf('施工店') >= 0 && leavesOf(row).length >= 5) return { me: me, row: row };
+      }
+    }
+    return null;
+  }
+  // そのタブが、選ばれているか：ほかのタブと、見た目（背景色・文字の色・太さ）が違うものが、選ばれているタブ。
+  // 見た目に差がなく、見分けられないときは、選ばれているものとして、扱う（ボタンが、出なくなるのを、避けるため）
+  function tabIsActive(bar) {
+    try {
+      var sig = function (e) { var cs = getComputedStyle(e); return bgOf(e) + '|' + cs.color + '|' + cs.fontWeight; };
+      var mine = sig(bar.me), others = leavesOf(bar.row).filter(function (e) { return e !== bar.me && !e.contains(bar.me) && !bar.me.contains(e); });
+      if (others.length < 2) return true;
+      var same = others.filter(function (e) { return sig(e) === mine; }).length;
+      var kinds = {}; others.forEach(function (e) { kinds[sig(e)] = 1; });
+      if (Object.keys(kinds).length === 1 && same === others.length) return true;   // 全部同じ見た目：見分けられない
+      return same < others.length / 2;
+    } catch (e) { return true; }
+  }
+  function tabBarButton(label, bar, onClick) {
+    var olds = document.querySelectorAll('[data-doc-hub]'); Array.prototype.forEach.call(olds, function (o) { if (o.parentNode) o.parentNode.removeChild(o); });
+    var wrap = el('div', 'padding:8px 0 4px');
+    wrap.setAttribute('data-doc-hub', '1');
+    var b = el('button', 'padding:10px 18px;font-size:15px;font-weight:bold;cursor:pointer;background:#0b5fb8;color:#fff;border:0;border-radius:6px;box-shadow:0 2px 6px rgba(0,0,0,.25)', '📄 ' + label);
+    b.type = 'button'; b.addEventListener('click', onClick);
+    wrap.appendChild(b);
+    bar.row.parentNode.insertBefore(wrap, bar.row.nextSibling);
+    var sync = function () { wrap.style.display = tabIsActive(bar) ? 'block' : 'none'; };
+    sync(); var timer = setInterval(function () { if (!document.body.contains(wrap) || !document.body.contains(bar.me)) { clearInterval(timer); return; } sync(); }, 400);
+    return wrap;
+  }
+
+  // 書類関係タブの中（登録画面の、いちばん上）に置くボタン。目印の項目（ANCHOR_FIELD）の行の、すぐ上に入れる。
+  // 目印が見えている間（＝書類関係タブを開いている間）だけ見える。目印が見つからなければ、null を返す
+  var ANCHOR_FIELD = '安全書類格納完了チェック';   // 案件くんの、書類関係タブの中にある項目（フィールドコード。案件くんのレイアウトで確認済み）
+  function inlineButton(label, anchor, onClick) {
+    // 目印の項目を入れている枠の、すぐ上に入れる。キントーンの枠の呼び名が違っても、置けるように、見つかる一番外の枠を使う
+    var row = (anchor.closest && (anchor.closest('.row-gaia') || anchor.closest('.control-gaia'))) || anchor.parentElement;
+    if (!row || !row.parentNode) return null;
+    var olds = document.querySelectorAll('[data-doc-hub]'); Array.prototype.forEach.call(olds, function (o) { if (o.parentNode) o.parentNode.removeChild(o); });
+    var wrap = el('div', 'padding:6px 0 10px');
+    wrap.setAttribute('data-doc-hub', '1');
+    var b = el('button', 'padding:10px 18px;font-size:15px;font-weight:bold;cursor:pointer;background:#0b5fb8;color:#fff;border:0;border-radius:6px;box-shadow:0 2px 6px rgba(0,0,0,.25)', '📄 ' + label);
+    b.type = 'button'; b.addEventListener('click', onClick);
+    wrap.appendChild(b);
+    row.parentNode.insertBefore(wrap, row);
+    var sync = function () { wrap.style.display = anchor.offsetParent !== null ? 'block' : 'none'; };
+    sync(); var timer = setInterval(function () { if (!document.body.contains(wrap)) { clearInterval(timer); return; } sync(); }, 400);
+    return wrap;
+  }
+
+  // 書類関係のタブの中に、保存した書類の一覧を見せる（書類保管の表は、フォームの一番下に、動かさずに置いてあるため）。
+  // 表は動かさず、画面に、読み取り用の一覧を出すだけ。PCでは、「開く」で、ダウンロードできる
+  var HIDE_TABLE_ON_DETAIL = true;   // 詳細画面で、書類保管の表を隠す（false にすると、表が、また出る）
+  var savedToken = 0;   // 画面を開くたびに増やす。古い呼び出しの一覧は、消えて、最新のものだけが残る（枠が、2つ出ないように）
+  function savedBox(record) {
+    var my = ++savedToken;
+    var toRows = function (rec) {
+      return rowsOf(rec).map(function (r) {
+        var f = r.value[SUB.file] && r.value[SUB.file].value, pf = SUB.pdf && r.value[SUB.pdf] && r.value[SUB.pdf].value;
+        return { name: cellText(r, SUB.name), version: cellText(r, SUB.version), at: cellText(r, SUB.at), status: cellText(r, SUB.status), file: f && f[0], pdf: pf && pf[0] };
+      }).filter(function (x) { return x.name; }).sort(function (a, b) { return a.at < b.at ? 1 : a.at > b.at ? -1 : 0; });
+    };
+    Array.prototype.forEach.call(document.querySelectorAll('[data-doc-saved]'), function (o) { if (o.parentNode) o.parentNode.removeChild(o); });
+    var box = el('details', 'margin:4px 0 8px;border:1px solid #cfd8e3;border-radius:6px;background:#fff;padding:6px 10px;max-width:760px');
+    box.setAttribute('data-doc-saved', '1');
+    var head = el('summary', 'cursor:pointer;font-weight:bold;font-size:14px', '保存した書類'); box.appendChild(head);
+    var body = el('div'); box.appendChild(body);
+    var render = function (rows) {
+      head.textContent = '保存した書類（' + rows.length + '件）';
+      body.textContent = '';
+      if (!rows.length) { body.appendChild(el('div', 'font-size:12px;color:#666;margin-top:6px', 'まだ、保存した書類は、ありません。「書類を作る」で作ると、ここに出ます。')); }
+      rows.slice(0, 30).forEach(function (x) {
+        var line = el('div', 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;border-top:1px solid #eee;padding:5px 0;font-size:13px');
+        line.appendChild(el('div', 'flex:1;min-width:180px', x.name + (x.version ? '　v' + x.version : '') + (x.at ? '　' + x.at : '') + (x.status ? '　［' + x.status + '］' : '')));
+        [[x.file, isMobile ? '内容を見る' : '開く'], [x.pdf, 'PDF']].forEach(function (p) {
+          if (!p[0] || (isMobile && p[1] === 'PDF')) return;
+          var b = el('button', 'padding:' + (isMobile ? '8px 14px' : '3px 10px') + ';font-size:' + (isMobile ? '14px' : '12px') + ';cursor:pointer', p[1]); b.type = 'button';
+          b.addEventListener('click', function () { b.disabled = true; download(p[0].fileKey).then(function (d) { saveAs(d, p[0].name); b.disabled = false; }, function () { b.disabled = false; }); });
+          line.appendChild(b);
+        });
+        body.appendChild(line);
+      });
+      if (rows.length > 30) body.appendChild(el('div', 'font-size:12px;color:#666;margin-top:4px', '新しい30件を表示しています。すべては、「依頼管理履歴」のタブの下の、書類保管の表です。'));
+    };
+    // 画面のイベントの記録は、表が欠けていることがある。件数は、案件の記録を、読み直して出す（読めるまでは、イベントの記録で出す）
+    var first = toRows(record);
+    if (first.length) render(first); else head.textContent = '保存した書類（読み込み中…）';
+    projectRecord(recApi.getId()).then(function (rec) { if (my === savedToken) render(toRows(rec)); }, function () { if (my === savedToken && !first.length) render([]); });
+    // 書類を作るボタンの、すぐ下に置く。ボタンが出ている間（＝書類関係のタブ）だけ見せる
+    var tries = 0;
+    var timer = setInterval(function () {
+      if (my !== savedToken) { clearInterval(timer); if (box.parentNode) box.parentNode.removeChild(box); return; }   // 新しい呼び出しがあれば、古いものは、やめる
+      var hub = document.querySelector('[data-doc-hub]');
+      if (!hub) { if (++tries > 50 && !document.body.contains(box)) clearInterval(timer); return; }
+      if (hub.nextSibling !== box) hub.parentNode.insertBefore(box, hub.nextSibling);
+      box.style.display = hub.style.display === 'none' ? 'none' : 'block';
+    }, 500);
+  }
+
   function onShow(event) {
     if (typeof JSZip === 'undefined') { console.error('JSZipが読み込まれていません。JavaScriptの読み込み順を確認してください。'); return event; }
-    var host = isMobile ? kintone.mobile.app.getHeaderSpaceElement() : kintone.app.record.getHeaderMenuSpaceElement();
-    if (!host || host.querySelector('[data-doc-hub]')) return event;
     var record = event.record, projectId = recApi.getId();
-    var btn = el('button', 'padding:8px 14px;font-size:14px;font-weight:bold;cursor:pointer;margin:4px 8px', '書類を作る');
-    btn.type = 'button'; btn.setAttribute('data-doc-hub', '1');
-    btn.addEventListener('click', function () {
+    try { savedBox(record); } catch (e) { console.error(e); }   // 書類関係のタブに、保存した書類の一覧
+    // 書類保管の表は、フォームの一番下（どのタブにも属さない行）にあり、タブ表示プラグインが、どれかのタブに出してしまう。
+    // 詳細画面では、表を隠す（保存した書類は、書類関係のタブの一覧で見える。「編集」の画面では、表が出る）。フォームの行は、動かさない
+    if (HIDE_TABLE_ON_DETAIL) { try { recApi.setFieldShown(SUB.table, false); } catch (e) { console.error(e); } }
+    var anchor = null;
+    try { anchor = recApi.getFieldElement(ANCHOR_FIELD); } catch (e) { anchor = null; }
+    // 置き場所の順番：①タブの並びの、すぐ下（書類関係タブが選ばれている間だけ）→ ②目印の項目の、すぐ上 → ③右下の丸いボタン（いつでも）
+    var place = function (label, onClick) {
+      var bar = findTabBar();
+      if (bar) { tabBarButton(label, bar, onClick); return; }
+      // タブの並びが、まだ見つからない：先に、予備（②→③）を出しておき、あとでタブの並びが見つかったら、そちらに移す（約6秒、探す）
+      var tries = 0;
+      if (!(anchor && inlineButton(label, anchor, onClick))) floatingButton(label, onClick);
+      var again = function () {
+        var b2 = findTabBar();
+        if (b2) { tabBarButton(label, b2, onClick); return; }
+        if (++tries < 20) setTimeout(again, 300);
+      };
+      setTimeout(again, 300);
+    };
+    place('書類を作る', function () {
       loadLabelMap(record).then(function (lm) {
         var values = buildValues(record, lm);
+        var tbl = lm.props && lm.props[SUB.table], tf = (tbl && tbl.fields) || {};
+        var caps = { approval: !!(tf[SUB.status] && tf[SUB.by] && tf[SUB.approvedAt]), pdf: !!tf[SUB.pdf] };   // 表に、その列があるときだけ、承認・PDF化を出す
         var projectName = '';
         NAME_LABELS.some(function (l) { if (values[l]) { projectName = values[l]; return true; } return false; });
         openPanel({
-          values: values, projectId: projectId, projectName: projectName || ('案件' + projectId),
+          values: values, caps: caps, projectId: projectId, projectName: projectName || ('案件' + projectId),
           currentStage: values[STAGE_LABEL] || '', target: TARGET_LABEL ? values[TARGET_LABEL] || '' : '', guessedTarget: guessTarget(projectName)
         });
       });
     });
-    host.appendChild(btn);
     return event;
   }
   kintone.events.on(['app.record.detail.show', 'mobile.app.record.detail.show'], onShow);

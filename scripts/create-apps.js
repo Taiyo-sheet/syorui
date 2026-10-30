@@ -1,12 +1,13 @@
 'use strict';
 /*
- * 「書類マスタ」「案件書類」を、指定したスペースの中に作って公開し、書類マスタに初期データを入れる。
+ * 「書類マスタ」を、指定したスペースの中に作って公開し、初期データを入れる。
+ * （作った書類の保管場所は、別のアプリではなく、案件くんの「書類保管」表。scripts/add-doc-storage.js で足す）
  *
  *   node scripts/create-apps.js --space=スペース番号            … 何をするかを表示するだけ（何も作らない）
  *   node scripts/create-apps.js --space=スペース番号 --yes      … 実際に作る
  *
  * 守ること
- *   ・同じ名前のアプリがすでにあれば、何も作らずに止まる（削除はしない）
+ *   ・「書類マスタ」という名前のアプリがすでにあれば、何も作らずに止まる（削除はしない）
  *   ・途中で失敗しても、作ったアプリは消さない（番号を表示するので、画面で確認して整理する）
  *   ・認証情報は環境変数（KINTONE_DOMAIN / KINTONE_USER / KINTONE_PASSWORD）から読む
  *
@@ -31,14 +32,6 @@ const MASTER_PROPS = {
   '見られる立場': { type: 'CHECK_BOX', code: '見られる立場', label: '見られる立場', options: opts(AUDS) },
   '対象': { type: 'DROP_DOWN', code: '対象', label: '対象', defaultValue: '共通', options: opts(TARGETS) },
   '使用状況': { type: 'DROP_DOWN', code: '使用状況', label: '使用状況', required: true, defaultValue: '使用中', options: opts(['使用中', '廃止']) },
-};
-const DOCS_PROPS = {
-  '案件ID': { type: 'NUMBER', code: '案件ID', label: '案件ID', required: true },
-  '書類名': { type: 'SINGLE_LINE_TEXT', code: '書類名', label: '書類名' },
-  '工程': { type: 'SINGLE_LINE_TEXT', code: '工程', label: '工程' },
-  '版': { type: 'NUMBER', code: '版', label: '版' },
-  '添付ファイル': { type: 'FILE', code: '添付ファイル', label: '添付ファイル' },
-  'AIチェック結果': { type: 'MULTI_LINE_TEXT', code: 'AIチェック結果', label: 'AIチェック結果' },
 };
 
 function loadSeed() {
@@ -69,7 +62,7 @@ async function main() {
   if (!sp.defaultThread) throw new Error('このスペースにはアプリを作れません（スレッドが見つかりません）');
   console.log('スペース：「' + sp.name + '」（番号 ' + spaceId + '）');
 
-  for (const name of ['書類マスタ', '案件書類']) {
+  for (const name of ['書類マスタ']) {
     const found = await k.findApps(name);
     if (found.length) {
       console.error('「' + name + '」がすでにあります（アプリ番号 ' + found.map((a) => a.appId).join('、') + '）。何も作らずに止めました。');
@@ -78,7 +71,7 @@ async function main() {
     }
   }
   console.log('同じ名前のアプリはありません。');
-  console.log('作るもの：書類マスタ（項目 ' + Object.keys(MASTER_PROPS).length + '、初期データ ' + seed.length + '件）／案件書類（項目 ' + Object.keys(DOCS_PROPS).length + '）');
+  console.log('作るもの：書類マスタ（項目 ' + Object.keys(MASTER_PROPS).length + '、初期データ ' + seed.length + '件）');
   if (!go) { console.log('\n※ これは確認だけです。実際に作るには、同じコマンドの最後に --yes を付けてください。'); return; }
 
   const created = [];
@@ -93,10 +86,9 @@ async function main() {
     return a.app;
   }
 
-  let masterId, docsId;
+  let masterId;
   try {
     masterId = await makeApp('書類マスタ', MASTER_PROPS);
-    docsId = await makeApp('案件書類', DOCS_PROPS);
     await k.api('POST', '/k/v1/records', { app: masterId, records: seed });
     console.log('書類マスタに ' + seed.length + '件を登録しました');
   } catch (e) {
@@ -107,7 +99,7 @@ async function main() {
 
   // 作成後の確認
   const problems = [];
-  for (const [id, name, props] of [[masterId, '書類マスタ', MASTER_PROPS], [docsId, '案件書類', DOCS_PROPS]]) {
+  for (const [id, name, props] of [[masterId, '書類マスタ', MASTER_PROPS]]) {
     const f = await k.api('GET', '/k/v1/app/form/fields', { app: id });
     Object.keys(props).forEach((c) => {
       if (!f.properties[c]) problems.push(name + '：項目「' + c + '」がありません');
@@ -123,8 +115,8 @@ async function main() {
   if (problems.length) { problems.forEach((p) => console.log('NG ' + p)); process.exit(4); }
   console.log('OK 項目・件数・スペースとも想定どおりです');
   console.log('書類マスタ：' + k.base + '/k/' + masterId + '/');
-  console.log('案件書類　：' + k.base + '/k/' + docsId + '/');
   console.log('次：書類マスタの「雛形」欄に、Excel・Word・PowerPointの雛形を添付してください。');
+  console.log('　　書類の保管場所は、案件くんに足します（npm run add-doc-storage）。');
 }
 
 main().catch((e) => { console.error(e.message || e); process.exit(1); });

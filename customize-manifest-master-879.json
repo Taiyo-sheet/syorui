@@ -1,0 +1,17 @@
+{
+  "app": "879",
+  "desktop": {
+    "js": [
+      "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js",
+      "customize/master-template.js",
+      "customize/doc-button.js"
+    ]
+  },
+  "mobile": {
+    "js": [
+      "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js",
+      "customize/master-template.js",
+      "customize/doc-button.js"
+    ]
+  }
+}

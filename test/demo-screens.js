@@ -42,6 +42,7 @@ const PAGE = (type) => `
   .rec{background:#fff;margin:16px 20px;padding:16px 20px;border:1px solid #ddd}
   .row{display:flex;border-bottom:1px solid #eee;padding:8px 0;font-size:14px}.row b{width:160px;color:#666;font-weight:normal}
   .hl{background:#fff7d6}
+  .sub{border-collapse:collapse;width:100%;font-size:13px}.sub th,.sub td{border:1px solid #ddd;padding:6px 8px;text-align:left}.sub th{background:#f0f3f5;font-weight:normal;color:#666}
 </style>
 <div class="top">案件くん</div>
 <div class="bar"><span class="t">案件詳細</span><span id="hdr"></span></div>
@@ -52,12 +53,17 @@ const PAGE = (type) => `
   <div class="row"><b>発注者</b>国土交通省 関東地方整備局</div>
   <div class="row"><b>元請</b>株式会社サンプル建設</div>
   <div class="row hl"><b>橋梁区分</b>${type}</div>
+  <div class="row" style="display:block"><b style="display:block;margin-bottom:6px">書類保管</b>
+    <table class="sub"><tr><th>書類名</th><th>工程</th><th>版</th><th>作成日</th><th>ファイル</th></tr>
+    <tr><td>作業手順書</td><td>施工前の書類</td><td>1</td><td>2026-10-12</td><td>📎 第二多摩川橋_作業手順書_v1.docx</td></tr>
+    <tr><td>作業手順書</td><td>施工前の書類</td><td>2</td><td>2026-10-19</td><td>📎 第二多摩川橋_作業手順書_v2.docx</td></tr>
+    <tr><td>打合せ議事次第</td><td>打合せ・見積・提案</td><td>1</td><td>2026-10-19</td><td>📎 第二多摩川橋_打合せ議事次第_v1.docx</td></tr></table></div>
 </div>`;
 
 (async () => {
   const mock = createMock(); const url = await mock.listen();
   const tpl = await build();
-  mock.addApp('575', '案件くん'); mock.addApp('10', '書類マスタ'); mock.addApp('11', '案件書類');
+  mock.addApp('575', '案件くん'); mock.addRecord('575', { 書類保管: { type: 'SUBTABLE', value: [] } }); mock.addApp('10', '書類マスタ');
   const word = mock.addFile(tpl.docx, 'tpl.docx'), xl = mock.addFile(tpl.xlsx, 'tpl.xlsx');
   // {{ }} のない雛形（使い回す手引き）
   const zp = await JSZip.loadAsync(tpl.docx);
@@ -84,7 +90,8 @@ const PAGE = (type) => `
     else add(r, r['書類名'], '共通');
   });
   // この案件では、作業手順書が v2、安全書類一式が v1 まで作成済み
-  const saved = (name, stage, v) => mock.addRecord('11', { 案件ID: { value: '1' }, 書類名: { value: name }, 工程: { value: stage }, 版: { value: String(v) }, 添付ファイル: { value: [] } });
+  const rowsSaved = [];
+  const saved = (name, stage, v) => { rowsSaved.push({ id: String(rowsSaved.length + 1), value: { 書類保管_書類名: { value: name }, 書類保管_工程: { value: stage }, 書類保管_版: { value: String(v) }, 書類保管_作成日: { value: '2026-10-19' }, 書類保管_ファイル: { value: [] } } }); mock.state.records['575'][0]['書類保管'].value = rowsSaved; };
   saved('作業手順書', '施工前の書類', 2); saved('安全書類一式', '施工前の書類', 1); saved('打合せ議事次第', '打合せ・見積・提案', 1); saved('見積書', '打合せ・見積・提案', 1);
 
   const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
@@ -116,6 +123,11 @@ const PAGE = (type) => `
 
   // 1) 案件の詳細画面：ヘッダーに「書類を作る」
   await shot('橋梁', '1_案件の詳細画面.png', async () => {});
+  // 1b) 案件の一番下：書類保管表（作った書類が、版つきで並ぶ）
+  await shot('橋梁', '1b_案件の書類保管表.png', async (page) => { await page.setViewportSize({ width: 980, height: 560 }); });
+  // 1c) 右下の丸いボタン（通常）と、近づけたとき（文字つきに広がる）
+  await shot('橋梁', '1c_右下の丸いボタン.png', async (page) => { await page.setViewportSize({ width: 980, height: 560 }); await page.waitForTimeout(300); });
+  await shot('橋梁', '1d_近づけると広がる.png', async (page) => { await page.setViewportSize({ width: 980, height: 560 }); await page.locator('[data-doc-hub]').hover(); await page.waitForTimeout(500); });
   // 2) 橋梁の案件：施工前の書類
   const open = async (page, stage) => {
     await page.locator('[data-doc-hub]').click();

@@ -1,0 +1,13 @@
+{
+  "app": "829",
+  "desktop": {
+    "js": [
+      "customize/round-buttons.js"
+    ]
+  },
+  "mobile": {
+    "js": [
+      "customize/round-buttons.js"
+    ]
+  }
+}

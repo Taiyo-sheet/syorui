@@ -1,0 +1,16 @@
+# Render（Blueprint）用の設定。pdf-server/ を、独立したサービスとして、Docker で動かす。
+# ALLOWED_ORIGINS：PDF化を呼んでよい画面（kintone）のオリジン。複数ならカンマ区切り
+# PDF_SERVER_KEY：ブラウザ以外から使う場合の鍵（Renderの画面で設定。ここには書かない）
+services:
+  - type: web
+    name: ts-pdf-server
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: starter
+    healthCheckPath: /healthz
+    envVars:
+      - key: ALLOWED_ORIGINS
+        value: https://taiyo1.cybozu.com
+      - key: PDF_SERVER_KEY
+        sync: false
