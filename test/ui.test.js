@@ -552,6 +552,7 @@ test('画面：PDF化は、承認済みの書類だけ。サーバー未設定�
     });
     page.on('dialog', (d) => d.accept());
     await page.addInitScript(FAKE_KINTONE);
+    await page.addInitScript(() => { new MutationObserver(() => { const b = document.querySelector('[data-missing-ok]'); if (b) b.click(); }).observe(document, { childList: true, subtree: true }); });
     const open = async () => {
       await page.goto(url + '/__page'); await page.evaluate((r) => window.__fire(r), RECORD);
       await page.locator('[data-doc-hub]').click(); await page.getByText('工程別の書類：').waitFor();
