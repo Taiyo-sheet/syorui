@@ -14,7 +14,8 @@
     "apply-customize": "node scripts/apply-customize.js",
     "check-tabs": "node scripts/check-tabs.js",
     "make-test-templates": "node scripts/make-test-templates.js",
-    "e2e": "node scripts/e2e-check.js"
+    "e2e": "node scripts/e2e-check.js",
+    "check-buttons": "node scripts/check-open-buttons.js"
   },
   "engines": {
     "node": ">=18"

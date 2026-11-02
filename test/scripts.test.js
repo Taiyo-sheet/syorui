@@ -286,3 +286,13 @@ test('safe-deploy：反映後に、フォームが変わっていたら、自動
     } finally { clearInterval(t); fs.readdirSync(env.KINTONE_BACKUP_DIR).forEach((n) => fs.rmSync(path.join(env.KINTONE_BACKUP_DIR, n), { recursive: true, force: true })); }
   });
 });
+
+test('外部アプリを開くボタンの鍵の検出（鍵あり・なし・OPEN_KEY変数）', () => {
+  const { analyze } = require('../scripts/check-open-buttons.js');
+  assert.strictEqual(analyze('var x = 1;'), null, '外部アプリが出てこないJSは対象外');
+  assert.strictEqual(analyze("var APP_URL = 'https://anken-kanri-1.onrender.com/';").hasKey, false, '鍵なしを見つける');
+  assert.strictEqual(analyze("var APP_URL = 'https://anken-kanri-1.onrender.com/?k=abcd1234efgh';").hasKey, true);
+  const a = analyze("var BASE = 'https://anken-kanri-1.onrender.com/mitsumori.html';\nvar OPEN_KEY = 'abcd1234efgh';");
+  assert.strictEqual(a.hasKey, true); assert.strictEqual(a.key, 'abcd1234efgh');
+  assert.strictEqual(analyze("var BASE = 'https://anken-kanri-1.onrender.com/mitsumori.html';\nvar OPEN_KEY = '';").hasKey, false, '鍵の欄が空なら、鍵なし');
+});
