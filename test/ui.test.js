@@ -83,7 +83,7 @@ async function openPage(browser, url, path, record, opt) {
   page.on('pageerror', (e) => errors.push(e.message));
   page.on('dialog', (d) => d.accept());
   // 「案件の情報が反映されていない」確認画面は、ふつうの試験では、自動で「このまま作成する」を押す（その画面の試験だけ、自分で押す）
-  if (!(opt && opt.manualMissing)) await page.addLocatorHandler(page.locator('[data-missing-ok]'), async (l) => { await l.click(); });
+  if (!(opt && opt.manualMissing)) await page.addInitScript(() => { new MutationObserver(() => { const b = document.querySelector('[data-missing-ok]'); if (b) b.click(); }).observe(document, { childList: true, subtree: true }); });
   await page.addInitScript(FAKE_KINTONE);
   await page.goto(url + path);
   await page.evaluate((r) => window.__fire(r), record || RECORD);
