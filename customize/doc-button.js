@@ -31,7 +31,7 @@
   var APPROVED = '承認済み';
   // PDF化サーバーのURL（Render に置いた pdf-server/。空にすると、PDF化のボタンは押せなくなる）
   var PDF_SERVER_URL = 'https://ts-pdf-server.onrender.com';
-  var AUTO_PDF_MINUTES = false;   // true にすると、議事録は、保存と同時に、PDFも自動で保存する（精度が良くなったら true に。いまは、「PDFにして保存」ボタンで、確認してから保存する）
+  var AUTO_PDF_MINUTES = true;   // true：議事録は、保存と同時に、PDFも自動で保存する（利用者の希望。止めたいときは false にする。どちらでも、保存したあとに「PDFにして保存」を押せる）
   var ACTIVE = '使用中';
   var NAME_LABELS = ['工事名称', '案件名', '現場名', '工事名'];   // ファイル名に使う項目（先に見つかったもの）
   // 案件くんの項目のうち、「橋梁」「一般道路」など、書類マスタの「対象」と同じ言葉が入っているもの。
@@ -1132,7 +1132,7 @@
               var base = (isMobile ? '保存しました：' : '保存してダウンロードしました：') + r.filename + unknownNote(r.unknown, r.empty);
               // 議事録は、保存と同時に、PDFも、案件に自動で保存する（承認は、待たない）
               var minutesDoc = asks.some(function (a) { return a.key === '議事録本文' || a.key === '議事録メモ'; });
-              if (!(AUTO_PDF_MINUTES && minutesDoc && PDF_SERVER_URL && ctx.caps && ctx.caps.pdf)) { reloadSoon(base + (minutesDoc ? '\n（内容を確認して、「PDFにして保存」を押すと、PDFも保存できます）' : ''), stay); return; }
+              if (!(AUTO_PDF_MINUTES && minutesDoc && PDF_SERVER_URL && ctx.caps && ctx.caps.pdf)) { reloadSoon(base + (minutesDoc ? '\n（「PDFにして保存」を押すと、PDFも保存できます）' : ''), stay); return; }
               setMsg('保存しました。PDFを作っています…（数秒〜十数秒かかります）', false);
               return convertToPdf(ctx, name, existing[name], true).then(function () { reloadSoon(base + '\nPDFも保存しました', stay); },
                 function (e) { reloadSoon(base + '\n（PDFは、保存できませんでした：' + ((e && e.message) || '') + '。議事録は、保存できています。承認したあと、「PDF化」で、作れます）', true); });

@@ -852,7 +852,7 @@ test('画面：議事録（{{議事録本文}}）は、ひとつの四角に、�
   } finally { await browser.close(); await mock.close(); }
 });
 
-test('画面：議事録は、保存してもPDFは自動で作らない。「PDFにして保存」で、承認なしでも、PDFを案件に保存する。PDFサーバーに届かなくても、議事録は保存される', { skip }, async () => {
+test('画面：議事録は、保存と同時に、PDFも、案件に自動で保存される（承認は待たない）。PDFサーバーに届かなくても、議事録は保存される', { skip }, async () => {
   const mock = createMock(); const url = await mock.listen();
   const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
   try {
@@ -868,6 +868,54 @@ test('画面：議事録は、保存してもPDFは自動で作らない。「PD
     const errors = []; page.on('pageerror', (e) => errors.push(e.message));
     await page.route('**/__lib/doc-button.js', async (route) => {
       let src = fs.readFileSync(require('path').join(__dirname, '..', 'customize', 'doc-button.js'), 'utf8');
+      src = src.replace(/var PDF_SERVER_URL = '[^']*';/, "var PDF_SERVER_URL = '" + (server ? url : 'http://127.0.0.1:1') + "';");
+      await route.fulfill({ status: 200, contentType: 'text/javascript; charset=utf-8', body: src });
+    });
+    page.on('dialog', (d) => d.accept());
+    await page.addInitScript(FAKE_KINTONE);
+    const create = async () => {
+      await page.goto(url + '/__page'); await page.evaluate((r) => window.__fire(r), RECORD);
+      await page.locator('[data-doc-hub]').click(); await page.getByText('工程別の書類：').waitFor();
+      await page.locator('select').nth(0).selectOption('打合せ・見積・提案');
+      await page.locator('div[style*="border-top"]', { hasText: '議事録まとめ' }).getByRole('button', { name: '作成して保存' }).click();
+      await page.locator('[data-ask="議事録本文"]').fill('【出席者】\n太田\n\n【場所】\n現場');
+      await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: '作成して保存' }).last().click()]);
+    };
+    await create();
+    await page.getByText(/PDFも保存しました/).waitFor();
+    let row = mock.state.records['575'][0]['書類保管'].value[0].value;
+    const pdf = row['書類保管_PDF'].value[0];
+    assert.match(pdf.name, /_議事録まとめ_v1\.pdf$/); assert.strictEqual(mock.state.files[pdf.fileKey].buf.slice(0, 5).toString(), '%PDF-', 'PDFが、自動で保存される');
+    assert.strictEqual((row['書類保管_承認状況'] || {}).value || '', '', '承認は、していない（承認を待たずに、PDFを作る）');
+    // PDFサーバーに届かない：議事録は、保存されている
+    mock.state.records['575'][0]['書類保管'].value = []; server = false;
+    await create();
+    await page.getByText(/PDFは、保存できませんでした/).waitFor();
+    row = mock.state.records['575'][0]['書類保管'].value[0].value;
+    assert.ok(row['書類保管_ファイル'].value.length === 1, '議事録（Word）は、保存されている');
+    assert.deepStrictEqual((row['書類保管_PDF'] || {}).value || [], [], 'PDFは、無い');
+    assert.deepStrictEqual(errors.filter((e) => !/Failed to fetch|ERR_|net::/.test(e)), []);
+    await ctx.close();
+  } finally { await browser.close(); await mock.close(); }
+});
+
+test('画面：議事録の自動PDFを止めたとき（AUTO_PDF_MINUTES=false）：保存してもPDFは作らない。「PDFにして保存」で、承認なしでも、PDFを案件に保存する。PDFサーバーに届かなくても、議事録は保存される', { skip }, async () => {
+  const mock = createMock(); const url = await mock.listen();
+  const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
+  try {
+    await seed(mock);
+    const tpl = await build();
+    const z = await JSZip.loadAsync(tpl.docx);
+    const P = (t) => '<w:p><w:r><w:t>' + t + '</w:t></w:r></w:p>';
+    z.file('word/document.xml', '<w:document xmlns:w="x"><w:body>' + P('日時：{{打合せ日}}　作成者：{{作成者}}') + P('{{議事録本文}}') + '</w:body></w:document>');
+    const k = mock.addFile(await z.generateAsync({ type: 'nodebuffer' }), 'matome.docx');
+    mock.addRecord('10', { 書類名: { value: '議事録まとめ' }, 工程: { value: '打合せ・見積・提案' }, 表示順: { value: '205' }, 説明: { value: '' }, 見られる立場: { value: ['営業'] }, 使用状況: { value: '使用中' }, 雛形: { value: [{ fileKey: k, name: 'matome.docx' }] } });
+    let server = true;
+    const ctx = await browser.newContext(); const page = await ctx.newPage();
+    const errors = []; page.on('pageerror', (e) => errors.push(e.message));
+    await page.route('**/__lib/doc-button.js', async (route) => {
+      let src = fs.readFileSync(require('path').join(__dirname, '..', 'customize', 'doc-button.js'), 'utf8');
+      src = src.replace('var AUTO_PDF_MINUTES = true;', 'var AUTO_PDF_MINUTES = false;');
       src = src.replace(/var PDF_SERVER_URL = '[^']*';/, "var PDF_SERVER_URL = '" + (server ? url : 'http://127.0.0.1:1') + "';");
       await route.fulfill({ status: 200, contentType: 'text/javascript; charset=utf-8', body: src });
     });
