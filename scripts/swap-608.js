@@ -18,7 +18,8 @@ const ROOT = path.join(__dirname, '..');
 const APP = 608, PC = 'mitsumori-open-608.js', MOBILE = 'mitsumori-open-mobile-608.js';
 const yes = process.argv.includes('--yes');
 const say = (t) => console.log(t);
-const strip = (it) => (it.type === 'URL' ? it : { type: 'FILE', file: { fileKey: it.file.fileKey } });
+// 既存のファイルは、取り出して、上げ直す（公開中のファイルキーは、そのまま登録には使えない）
+const reup = async (k, it, kind) => (it.type === 'URL' ? it : { type: 'FILE', file: { fileKey: await k.upload(Buffer.from(await k.download(it.file.fileKey)), it.file.name, kind === 'css' ? 'text/css' : 'text/javascript') } });
 
 async function snap(k) {
   const layout = (await k.api('GET', '/k/v1/app/form/layout', { app: APP })).layout;
@@ -28,8 +29,9 @@ async function snap(k) {
 const names = (c) => ['desktop', 'mobile'].map((e) => ((c[e] && c[e].js) || []).map((x) => (x.file ? x.file.name : x.url)).join(','));
 
 async function putCustomize(k, cur, replace) {
-  const body = { app: APP, desktop: { js: [], css: (cur.desktop.css || []).map(strip) }, mobile: { js: (cur.mobile.js || []).map(strip), css: (cur.mobile.css || []).map(strip) } };
-  for (const it of cur.desktop.js || []) body.desktop.js.push(it.file && it.file.name === PC && replace ? { type: 'FILE', file: { fileKey: await k.upload(replace, PC, 'text/javascript') } } : strip(it));
+  const all = async (a, kind) => { const out = []; for (const it of a || []) out.push(await reup(k, it, kind)); return out; };
+  const body = { app: APP, desktop: { js: [], css: await all(cur.desktop.css, 'css') }, mobile: { js: await all(cur.mobile.js, 'js'), css: await all(cur.mobile.css, 'css') } };
+  for (const it of cur.desktop.js || []) body.desktop.js.push(it.file && it.file.name === PC && replace ? { type: 'FILE', file: { fileKey: await k.upload(replace, PC, 'text/javascript') } } : await reup(k, it, 'js'));
   if (cur.scope) body.scope = cur.scope;
   await k.api('PUT', '/k/v1/preview/app/customize', body);
   await k.api('POST', '/k/v1/preview/app/deploy', { apps: [{ app: APP }] });
