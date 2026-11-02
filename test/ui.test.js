@@ -76,12 +76,14 @@ async function seed(mock) {
   mock.addRecord('10', { 書類名: { value: '廃止した書類' }, 工程: { value: '竣工' }, 表示順: { value: '999' }, 使用状況: { value: '廃止' }, 見られる立場: { value: [] }, 雛形: { value: [] } });
 }
 
-async function openPage(browser, url, path, record) {
+async function openPage(browser, url, path, record, opt) {
   const ctx = await browser.newContext();
   const page = await ctx.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
   page.on('dialog', (d) => d.accept());
+  // 「案件の情報が反映されていない」確認画面は、ふつうの試験では、自動で「このまま作成する」を押す（その画面の試験だけ、自分で押す）
+  if (!(opt && opt.manualMissing)) await page.addLocatorHandler(page.locator('[data-missing-ok]'), async (l) => { await l.click(); });
   await page.addInitScript(FAKE_KINTONE);
   await page.goto(url + path);
   await page.evaluate((r) => window.__fire(r), record || RECORD);
@@ -967,26 +969,28 @@ test('画面：書類関係のタブに、保存した書類の一覧が出る�
   } finally { await browser.close(); await mock.close(); }
 });
 
-test('画面：作る前に、雛形に入れる案件くんの項目が空なら、知らせる（キャンセルで作らない／OKで作る）', { skip }, async () => {
+test('画面：作る前に、案件の情報が入らない場所を、赤い字で知らせる（やめるなら作らない／このまま作成なら作る）', { skip }, async () => {
   const mock = createMock(); const url = await mock.listen();
   const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
   try {
     await seed(mock);
     const rec = Object.assign({}, RECORD, { c_addr: { type: 'SINGLE_LINE_TEXT', value: '' } });   // 現場住所が空
-    const { page, errors } = await openPage(browser, url, '/__page', rec);
-    page.removeAllListeners('dialog');
-    const msgs = []; let answer = false;
-    page.on('dialog', (d) => { msgs.push(d.message()); answer ? d.accept() : d.dismiss(); });
+    const { page, errors } = await openPage(browser, url, '/__page', rec, { manualMissing: true });
     await page.locator('[data-doc-hub]').click(); await page.getByText('工程別の書類：').waitFor();
     await page.locator('select').nth(0).selectOption('打合せ・見積・提案');
     await page.getByRole('button', { name: '作成して保存' }).click();
-    await page.waitForFunction(() => true); await page.waitForTimeout(500);
-    assert.match(msgs[0], /案件くんで、次の項目が、空です：\n現場住所/);
-    assert.strictEqual(stored(mock).length, 0, 'キャンセルなら、作らない');
-    answer = true;
+    const box = page.locator('[data-missing]'); await box.waitFor();
+    assert.match(await box.textContent(), /案件の情報が、反映されていない場所があります/);
+    assert.match(await box.textContent(), /現場住所/);
+    const color = await box.getByText('・現場住所').evaluate((e) => getComputedStyle(e.parentElement).color);
+    assert.strictEqual(color, 'rgb(192, 57, 43)', '赤い字で出す');
+    await page.locator('[data-missing-cancel]').click();
+    await page.waitForTimeout(300);
+    assert.strictEqual(stored(mock).length, 0, 'やめるなら、作らない');
     await page.getByRole('button', { name: '作成して保存' }).click();
+    await page.locator('[data-missing-ok]').click();
     await page.getByText(/ダウンロードしました/).waitFor();
-    assert.strictEqual(stored(mock).length, 1, 'OKなら、作る');
+    assert.strictEqual(stored(mock).length, 1, 'このまま作成なら、作る');
     assert.deepStrictEqual(errors, []);
   } finally { await browser.close(); await mock.close(); }
 });

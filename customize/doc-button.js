@@ -610,6 +610,40 @@
     });
     return out;
   }
+  // 雛形の {{ }} のうち、案件くんに該当する項目が無いもの（作ると、{{ }} のまま残る）。自動で入る言葉・画面で入力する項目は、数えない
+  function unknownFieldsOf(rec, values) {
+    var t = templateOf(rec), l = (t && phs[t.fileKey]) || [], seen = {}, out = [];
+    l.forEach(function (n) {
+      if (seen[n] || NOT_CHECKED[n] || ASK.some(function (a) { return a.key === n; }) || Object.prototype.hasOwnProperty.call(values, n)) return;
+      seen[n] = 1; out.push(n);
+    });
+    return out;
+  }
+  // 作る前の確認：案件の情報が書類に入らない場所を、赤い字で知らせる。「このまま作成」か「やめる」を選ぶ
+  function confirmMissing(name, empty, unknown) {
+    return new Promise(function (resolve) {
+      var cover = el('div', 'position:fixed;left:0;top:0;right:0;bottom:0;background:rgba(0,0,0,.5);z-index:10004;overflow:auto'); cover.setAttribute('data-missing', '1');
+      var card = el('div', 'background:#fff;max-width:560px;margin:24px auto;border-radius:8px;padding:16px;font-size:' + (isMobile ? '16px' : '14px') + ';box-sizing:border-box;width:calc(100% - 24px)');
+      card.appendChild(el('div', 'font-weight:bold;font-size:16px;margin-bottom:8px;color:#c0392b', '案件の情報が、反映されていない場所があります'));
+      card.appendChild(el('div', 'margin-bottom:8px', '「' + name + '」を、このまま作ると、次の場所が、空欄（または {{ }} のまま）の書類になります。'));
+      function list(title, items, note) {
+        if (!items.length) return;
+        card.appendChild(el('div', 'font-weight:bold;margin:10px 0 4px;color:#c0392b', title));
+        var box = el('div', 'border:1px solid #e6b0aa;background:#fdf2f0;border-radius:6px;padding:8px 10px;color:#c0392b;font-weight:bold;line-height:1.9');
+        items.forEach(function (n) { box.appendChild(el('div', '', '・' + n)); });
+        card.appendChild(box);
+        card.appendChild(el('div', 'font-size:12px;color:#666;margin-top:4px', note));
+      }
+      list('案件くんに、まだ入力されていない項目', empty, '案件くんの画面で入力してから作ると、書類に入ります。');
+      list('案件くんに、対応する項目が、ない', unknown, '雛形の {{ }} の名前が、案件くんの項目名と違うようです（書類マスタの管理者に連絡してください）。');
+      var bar = el('div', 'display:flex;gap:10px;justify-content:space-between;margin-top:16px;flex-wrap:wrap');
+      var no = el('button', 'padding:10px 16px;font-size:15px;cursor:pointer', 'やめて、案件くんに入力する'); no.type = 'button'; no.setAttribute('data-missing-cancel', '1');
+      var ok = el('button', 'padding:10px 16px;font-size:15px;font-weight:bold;cursor:pointer;background:#c0392b;color:#fff;border:0;border-radius:6px', 'このまま作成する'); ok.type = 'button'; ok.setAttribute('data-missing-ok', '1');
+      function done(v) { document.body.removeChild(cover); resolve(v); }
+      no.addEventListener('click', function () { done(false); }); ok.addEventListener('click', function () { done(true); });
+      bar.appendChild(no); bar.appendChild(ok); card.appendChild(bar); cover.appendChild(card); document.body.appendChild(cover);
+    });
+  }
   function asksOf(rec) { var t = templateOf(rec); var l = (t && phs[t.fileKey]) || []; return ASK.filter(function (a) { return l.indexOf(a.key) >= 0; }); }
   function kindOf(rec) { var t = templateOf(rec); return t ? kinds[t.fileKey] : undefined; }
   function openAsIs(rec) {
@@ -1084,8 +1118,9 @@
           var cur = existing[name];
           if (cur && !confirm('「' + name + '」は v' + cur.version + ' まで作成済みです。v' + (cur.version + 1) + ' を作成しますか？')) return;
           // 作る前に、雛形に入れる案件くんの項目のうち、空のものを知らせる（空のまま作ると、その場所が空欄の書類になるため）
-          var emptyNow = emptyFieldsOf(rec, ctx.values);
-          if (emptyNow.length && !confirm('案件くんで、次の項目が、空です：\n' + emptyNow.join('、') + '\n\nこのままだと、書類の、その場所が、空欄になります。このまま作成しますか？\n（「キャンセル」で、案件くんに入力してから、作れます）')) return;
+          var emptyNow = emptyFieldsOf(rec, ctx.values), unknownNow = unknownFieldsOf(rec, ctx.values);
+          (emptyNow.length || unknownNow.length ? confirmMissing(name, emptyNow, unknownNow) : Promise.resolve(true)).then(function (go) {
+          if (!go) return;
           var asks = asksOf(rec);
           (asks.length ? askValues(asks, name) : Promise.resolve({})).then(function (extra) {
             if (!extra) return;
@@ -1102,6 +1137,7 @@
                 function (e) { reloadSoon(base + '\n（PDFは、保存できませんでした：' + ((e && e.message) || '') + '。議事録は、保存できています。承認したあと、「PDF化」で、作れます）', true); });
             })
               .catch(function (e) { btn.disabled = false; setMsg((e && e.message) || '作成できませんでした', true); });
+          });
           });
         });
         var right = el('div', 'display:flex;flex-direction:column;gap:6px;align-items:stretch');
