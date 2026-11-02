@@ -31,6 +31,7 @@
   var APPROVED = '承認済み';
   // PDF化サーバーのURL（Render に置いた pdf-server/。空にすると、PDF化のボタンは押せなくなる）
   var PDF_SERVER_URL = 'https://ts-pdf-server.onrender.com';
+  var AUTO_PDF_MINUTES = false;   // true にすると、議事録は、保存と同時に、PDFも自動で保存する（精度が良くなったら true に。いまは、「PDFにして保存」ボタンで、確認してから保存する）
   var ACTIVE = '使用中';
   var NAME_LABELS = ['工事名称', '案件名', '現場名', '工事名'];   // ファイル名に使う項目（先に見つかったもの）
   // 案件くんの項目のうち、「橋梁」「一般道路」など、書類マスタの「対象」と同じ言葉が入っているもの。
@@ -1131,7 +1132,7 @@
               var base = (isMobile ? '保存しました：' : '保存してダウンロードしました：') + r.filename + unknownNote(r.unknown, r.empty);
               // 議事録は、保存と同時に、PDFも、案件に自動で保存する（承認は、待たない）
               var minutesDoc = asks.some(function (a) { return a.key === '議事録本文' || a.key === '議事録メモ'; });
-              if (!(minutesDoc && PDF_SERVER_URL && ctx.caps && ctx.caps.pdf)) { reloadSoon(base, stay); return; }
+              if (!(AUTO_PDF_MINUTES && minutesDoc && PDF_SERVER_URL && ctx.caps && ctx.caps.pdf)) { reloadSoon(base + (minutesDoc ? '\n（内容を確認して、「PDFにして保存」を押すと、PDFも保存できます）' : ''), stay); return; }
               setMsg('保存しました。PDFを作っています…（数秒〜十数秒かかります）', false);
               return convertToPdf(ctx, name, existing[name], true).then(function () { reloadSoon(base + '\nPDFも保存しました', stay); },
                 function (e) { reloadSoon(base + '\n（PDFは、保存できませんでした：' + ((e && e.message) || '') + '。議事録は、保存できています。承認したあと、「PDF化」で、作れます）', true); });
@@ -1172,17 +1173,18 @@
             apb.addEventListener('click', function () { approveNames([name], '「' + name + '」v' + ex.version); });
             right.appendChild(apb);
           }
-          // PDF化（承認済みの書類だけ）
-          if (ctx.caps && ctx.caps.pdf && ex.approved) {
+          // PDF化（承認済みの書類。議事録は、承認なしでも、内容を確認してから「PDFにして保存」）
+          var isMin = asksOf(rec).some(function (a) { return a.key === '議事録本文' || a.key === '議事録メモ'; });
+          if (ctx.caps && ctx.caps.pdf && (ex.approved || isMin)) {
             if (ex.pdf) {
               var pdfOpen = el('button', 'padding:6px 10px;font-size:12px;cursor:pointer', 'PDFを開く'); pdfOpen.type = 'button';
               pdfOpen.addEventListener('click', function () { download(ex.pdf.fileKey).then(function (buf) { saveAs(buf, ex.pdf.name); }).catch(function (e) { setMsg((e && e.message) || '開けませんでした', true); }); });
               right.appendChild(pdfOpen);
             } else {
-              var pdfb = el('button', 'padding:6px 10px;font-size:12px;cursor:pointer', PDF_SERVER_URL ? 'PDF化' : 'PDF化（サーバー未設定）'); pdfb.type = 'button'; pdfb.disabled = !PDF_SERVER_URL;
+              var pdfb = el('button', 'padding:6px 10px;font-size:12px;cursor:pointer', PDF_SERVER_URL ? (ex.approved ? 'PDF化' : 'PDFにして保存') : 'PDF化（サーバー未設定）'); pdfb.type = 'button'; pdfb.disabled = !PDF_SERVER_URL;
               pdfb.addEventListener('click', function () {
                 pdfb.disabled = true; setMsg('PDF化しています…', false);
-                convertToPdf(ctx, name, existing[name]).then(function (r) { existing[name].pdf = { fileKey: null, name: r.name }; saveAs(r.data, r.name); setMsg('PDFを保存しました：' + r.name + '（画面を開き直すと、「PDFを開く」になります）', false); })
+                convertToPdf(ctx, name, existing[name], !ex.approved).then(function (r) { existing[name].pdf = { fileKey: null, name: r.name }; saveAs(r.data, r.name); setMsg('PDFを保存しました：' + r.name + '（画面を開き直すと、「PDFを開く」になります）', false); })
                   .catch(function (e) { pdfb.disabled = false; setMsg((e && e.message) || 'PDF化できませんでした', true); });
               });
               right.appendChild(pdfb);

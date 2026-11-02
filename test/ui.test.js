@@ -852,7 +852,7 @@ test('画面：議事録（{{議事録本文}}）は、ひとつの四角に、�
   } finally { await browser.close(); await mock.close(); }
 });
 
-test('画面：議事録は、保存と同時に、PDFも、案件に自動で保存される（承認は待たない）。PDFサーバーに届かなくても、議事録は保存される', { skip }, async () => {
+test('画面：議事録は、保存してもPDFは自動で作らない。「PDFにして保存」で、承認なしでも、PDFを案件に保存する。PDFサーバーに届かなくても、議事録は保存される', { skip }, async () => {
   const mock = createMock(); const url = await mock.listen();
   const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
   try {
@@ -882,15 +882,29 @@ test('画面：議事録は、保存と同時に、PDFも、案件に自動で�
       await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: '作成して保存' }).last().click()]);
     };
     await create();
-    await page.getByText(/PDFも保存しました/).waitFor();
+    await page.getByText(/「PDFにして保存」を押すと/).waitFor();
     let row = mock.state.records['575'][0]['書類保管'].value[0].value;
+    assert.deepStrictEqual((row['書類保管_PDF'] || {}).value || [], [], '自動では、PDFを作らない');
+    assert.ok(row['書類保管_ファイル'].value.length === 1, '議事録（Word）は、保存されている');
+    // 開き直す → 承認前でも「PDFにして保存」が出る → 押すと、PDFが保存される
+    const reopen = async () => {
+      await page.goto(url + '/__page'); await page.evaluate((r) => window.__fire(r), RECORD);
+      await page.locator('[data-doc-hub]').click(); await page.getByText('工程別の書類：').waitFor();
+      await page.locator('select').nth(0).selectOption('打合せ・見積・提案');
+    };
+    await reopen();
+    const [dl] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'PDFにして保存' }).click()]);
+    await page.getByText(/PDFを保存しました/).waitFor();
+    row = mock.state.records['575'][0]['書類保管'].value[0].value;
     const pdf = row['書類保管_PDF'].value[0];
-    assert.match(pdf.name, /_議事録まとめ_v1\.pdf$/); assert.strictEqual(mock.state.files[pdf.fileKey].buf.slice(0, 5).toString(), '%PDF-', 'PDFが、自動で保存される');
+    assert.match(pdf.name, /_議事録まとめ_v1\.pdf$/); assert.strictEqual(mock.state.files[pdf.fileKey].buf.slice(0, 5).toString(), '%PDF-', 'PDFが保存される');
     assert.strictEqual((row['書類保管_承認状況'] || {}).value || '', '', '承認は、していない（承認を待たずに、PDFを作る）');
-    // PDFサーバーに届かない：議事録は、保存されている
+    // PDFサーバーに届かない：議事録は、保存されている。PDFのボタンは、失敗を知らせる
     mock.state.records['575'][0]['書類保管'].value = []; server = false;
     await create();
-    await page.getByText(/PDFは、保存できませんでした/).waitFor();
+    await reopen();
+    await page.getByRole('button', { name: 'PDFにして保存' }).click();
+    await page.getByText(/PDF化できませんでした|Failed to fetch|PDF化に失敗/).waitFor();
     row = mock.state.records['575'][0]['書類保管'].value[0].value;
     assert.ok(row['書類保管_ファイル'].value.length === 1, '議事録（Word）は、保存されている');
     assert.deepStrictEqual((row['書類保管_PDF'] || {}).value || [], [], 'PDFは、無い');
