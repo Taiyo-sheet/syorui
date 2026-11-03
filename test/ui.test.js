@@ -352,6 +352,52 @@ test('画面：直したファイルを、次の版として登録できる', { 
   } finally { await browser.close(); await mock.close(); }
 });
 
+test('画面：直したファイルを登録すると、そのPDFも案件に自動で保存される（PDFサーバーに届かなくても、登録はできる）', { skip }, async () => {
+  const mock = createMock(); const url = await mock.listen();
+  const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
+  try {
+    await seed(mock);
+    const tpl = await build();
+    let server = true;
+    const ctx = await browser.newContext(); const page = await ctx.newPage();
+    const errors = []; page.on('pageerror', (e) => errors.push(e.message));
+    await page.route('**/__lib/doc-button.js', async (route) => {
+      let src = fs.readFileSync(require('path').join(__dirname, '..', 'customize', 'doc-button.js'), 'utf8');
+      src = src.replace(/var PDF_SERVER_URL = '[^']*';/, "var PDF_SERVER_URL = '" + (server ? url : 'http://127.0.0.1:1') + "';");
+      await route.fulfill({ status: 200, contentType: 'text/javascript; charset=utf-8', body: src });
+    });
+    page.on('dialog', (d) => d.accept());
+    await page.addInitScript(FAKE_KINTONE);
+    await page.addInitScript(() => { new MutationObserver(() => { const b = document.querySelector('[data-missing-ok]'); if (b) b.click(); }).observe(document, { childList: true, subtree: true }); });
+    const open = async () => {
+      await page.goto(url + '/__page'); await page.evaluate((r) => window.__fire(r), RECORD);
+      await page.locator('[data-doc-hub]').click(); await page.getByText('工程別の書類：').waitFor();
+      await page.locator('select').nth(0).selectOption('打合せ・見積・提案');
+    };
+    await open();
+    await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: '作成して保存' }).click()]);
+    await page.getByText(/_v1\.docx/).waitFor();
+    await open(); await page.getByText('最新 v1').waitFor();
+    await page.locator('input[data-revision="打合せ議事次第"]').setInputFiles({ name: '直した.docx', mimeType: 'application/octet-stream', buffer: tpl.docx });
+    await page.getByText(/PDFも保存しました/).waitFor();
+    let rows = stored(mock);
+    assert.deepStrictEqual(rows.map((r) => r.version), ['1', '2']);
+    const raw = () => mock.state.records['575'][0]['書類保管'].value.map((r) => r.value);
+    const pdfOf = (i) => (raw()[i]['書類保管_PDF'] || {}).value || [];
+    assert.strictEqual(pdfOf(1).length, 1, 'v2 の行に、PDFが保存される');
+    assert.strictEqual(mock.state.files[pdfOf(1)[0].fileKey].buf.slice(0, 5).toString(), '%PDF-');
+    // PDFサーバーに届かない：v3 の登録は、できている（PDFだけ無い）
+    server = false; await open(); await page.getByText('最新 v2').waitFor();
+    await page.locator('input[data-revision="打合せ議事次第"]').setInputFiles({ name: '直した2.docx', mimeType: 'application/octet-stream', buffer: tpl.docx });
+    await page.getByText(/PDFは、保存できませんでした/).waitFor();
+    rows = stored(mock);
+    assert.deepStrictEqual(rows.map((r) => r.version), ['1', '2', '3'], '登録は、できている');
+    assert.strictEqual(pdfOf(2).length, 0, 'PDFだけ、無い');
+    assert.deepStrictEqual(errors.filter((e) => !/Failed to fetch|ERR_|net::/.test(e)), []);
+    await ctx.close();
+  } finally { await browser.close(); await mock.close(); }
+});
+
 test('画面：案件くんの値が空のまま入る項目を、作成後に知らせる（自動では画面を更新しない）', { skip }, async () => {
   const mock = createMock(); const url = await mock.listen();
   const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });

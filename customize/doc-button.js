@@ -1154,7 +1154,12 @@
             rev.disabled = true; setMsg('登録しています…', false);
             registerRevision(rec, f, ctx).then(function (r) {
               existing[name] = { version: r.version, filename: r.filename, data: r.data };
-              setMsg('v' + r.version + ' として登録しました：' + r.filename, false); updateStageLabels(); show();
+              var done = function (more) { setMsg('v' + r.version + ' として登録しました：' + r.filename + (more || ''), false); updateStageLabels(); show(); };
+              // 直したファイルを登録したら、そのPDFも、案件に自動で保存する（書き足したあとが、完成した形のため）
+              if (!(PDF_SERVER_URL && ctx.caps && ctx.caps.pdf)) { done(''); return; }
+              setMsg('v' + r.version + ' として登録しました。PDFを作っています…（数秒〜十数秒かかります）', false);
+              return convertToPdf(ctx, name, existing[name], true).then(function (p) { existing[name].pdf = { fileKey: null, name: p.name }; done('\nPDFも保存しました：' + p.name); },
+                function (e) { done('\n（PDFは、保存できませんでした：' + ((e && e.message) || '') + '。「PDFにして保存」で、もう一度できます）'); });
             }).catch(function (e) { rev.disabled = false; setMsg((e && e.message) || '登録できませんでした', true); });
           });
           // 書類のチェック：保存した最新の書類を、ダウンロードする前に、画面の中だけで確認する（外部には送りません）
