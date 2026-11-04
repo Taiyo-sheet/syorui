@@ -471,6 +471,74 @@
   }
   function quote(s) { return '"' + String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"'; }
 
+
+  // ---------- 原価管理表：請求くん(829)の請求を、原価明細に入れる ----------
+  // 請求くんの項目コード。案件番号（案件くんの「案件番号」と同じ値）で、その案件の請求を引く
+  var BILL = { app: 829, anken: 'anken', date: 'billing_date', vendor: 'vendor_name', kubun: 'kubun', table: 'details', item: 'item_name', amount: 'bill_amount', status: 'ステータス', subtotal: 'subtotal' };
+  var GENKA = { sheet: '原価管理', firstRow: 24, lastRow: 173, date: 'B', vendor: 'F', item: 'R',
+    cols: { '材料（発注なし）': 'AJ', '発注連動': 'AV' }, other: 'AV' };   // 区分から科目の列へ（材料→材料費、発注連動→外注費。それ以外は外注費）
+  function xmlEsc(t) { return String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+  function excelSerial(iso) {
+    var m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+    return m ? Math.round((Date.UTC(+m[1], +m[2] - 1, +m[3]) - Date.UTC(1899, 11, 30)) / 86400000) : null;
+  }
+  // 請求くんのレコード → 原価明細の行（請求日の順。明細の1行が、原価明細の1行）
+  function billRowsOf(records) {
+    var rows = [];
+    (records || []).forEach(function (r) {
+      var date = r[BILL.date] && r[BILL.date].value, vendor = (r[BILL.vendor] && r[BILL.vendor].value) || '', kubun = (r[BILL.kubun] && r[BILL.kubun].value) || '';
+      var lines = (r[BILL.table] && r[BILL.table].value) || [];
+      var any = false;
+      lines.forEach(function (ln) {
+        var v = ln.value || {}, amt = Number((v[BILL.amount] && v[BILL.amount].value) || 0);
+        if (!amt) return; any = true;
+        rows.push({ date: date || '', vendor: vendor, item: (v[BILL.item] && v[BILL.item].value) || '', kubun: kubun, amount: amt });
+      });
+      if (!any && r[BILL.subtotal] && Number(r[BILL.subtotal].value)) rows.push({ date: date || '', vendor: vendor, item: '（明細なし）', kubun: kubun, amount: Number(r[BILL.subtotal].value) });
+    });
+    return rows.sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; });
+  }
+  // 原価管理表（Excel）の「原価明細」に、行を入れる。金額・日付は、数字のまま入れる（合計や月ごとの集計の計算式が、動くように）
+  function genkaFill(JSZipLib, buf, rows) {
+    return JSZipLib.loadAsync(buf).then(function (zip) {
+      var wbf = zip.file('xl/workbook.xml'), rf = zip.file('xl/_rels/workbook.xml.rels');
+      if (!wbf || !rf) return { data: buf, count: 0, isGenka: false };
+      return Promise.all([wbf.async('string'), rf.async('string')]).then(function (xs) {
+        var tag = (xs[0].match(/<sheet\b[^>]*>/g) || []).filter(function (t) { return t.indexOf('name="' + GENKA.sheet + '"') >= 0; })[0];
+        var rid = tag && (tag.match(/r:id="([^"]+)"/) || [])[1];
+        var rel = rid && (xs[1].match(/<Relationship\b[^>]*>/g) || []).filter(function (t) { return t.indexOf('Id="' + rid + '"') >= 0; })[0];
+        var target = rel && (rel.match(/Target="([^"]+)"/) || [])[1];
+        if (!target) return { data: buf, count: 0, isGenka: false };
+        var path = 'xl/' + target.replace(/^\/?(xl\/)?/, '');
+        var sf = zip.file(path); if (!sf) return { data: buf, count: 0, isGenka: false };
+        return sf.async('string').then(function (xml) {
+          var max = GENKA.lastRow - GENKA.firstRow + 1, used = rows.slice(0, max), skipped = 0;
+          var setCell = function (ref, kind, val) {
+            var re = new RegExp('<c r="' + ref + '"([^>]*?)(?:/>|>[\\s\\S]*?</c>)');
+            var m = xml.match(re); if (!m) { skipped++; return; }
+            var attrs = m[1].replace(/\s+t="[^"]*"/, '').replace(/\/$/, '');
+            var cell = kind === 'n' ? '<c r="' + ref + '"' + attrs + '><v>' + val + '</v></c>' : '<c r="' + ref + '"' + attrs + ' t="inlineStr"><is><t xml:space="preserve">' + xmlEsc(cleanValue(val)) + '</t></is></c>';
+            xml = xml.replace(re, function () { return cell; });
+          };
+          used.forEach(function (x, i) {
+            var r = GENKA.firstRow + i, serial = excelSerial(x.date);
+            if (serial !== null) setCell(GENKA.date + r, 'n', serial);
+            if (x.vendor) setCell(GENKA.vendor + r, 's', x.vendor);
+            if (x.item) setCell(GENKA.item + r, 's', x.item);
+            setCell((GENKA.cols[x.kubun] || GENKA.other) + r, 'n', x.amount);
+          });
+          zip.file(path, xml);
+          return zip.generateAsync({ type: 'arraybuffer' }).then(function (data) { return { data: data, count: used.length, over: rows.length - used.length, skipped: skipped, isGenka: true }; });
+        });
+      });
+    });
+  }
+  // 原価管理表の雛形か（Excelで、「原価管理」という名前のシートがあるか）
+  function isGenkaBook(JSZipLib, buf) {
+    return JSZipLib.loadAsync(buf).then(function (zip) { var f = zip.file('xl/workbook.xml'); return f ? f.async('string') : ''; })
+      .then(function (x) { return x.indexOf('name="' + GENKA.sheet + '"') >= 0; });
+  }
+
   function buildValues(record, lm) {
     var values = {};
     Object.keys(lm.map).forEach(function (label) {
@@ -484,13 +552,13 @@
 
   // 書類マスタ（master-template.js）が、「試しに作る」で、この部品だけを借りるときの出口（この画面では、ボタンなどは、一切出さない）
   if (typeof kintone !== 'undefined' && typeof window !== 'undefined' && window.__TS_DOC_ENGINE_ONLY) {
-    window.TSDocEngine = { formatMinutes: formatMinutes, fillTemplate: fillTemplate, buildValues: buildValues, checkText: checkText, extractText: extractText, fieldText: fieldText, ASK: ASK, NAME_LABELS: NAME_LABELS };
+    window.TSDocEngine = { genkaFill: genkaFill, billRowsOf: billRowsOf, formatMinutes: formatMinutes, fillTemplate: fillTemplate, buildValues: buildValues, checkText: checkText, extractText: extractText, fieldText: fieldText, ASK: ASK, NAME_LABELS: NAME_LABELS };
     return;
   }
   // Node（テスト）から使うときは、ここまでの部品だけを渡して終わる
   if (typeof kintone === 'undefined') {
     if (typeof module !== 'undefined' && module.exports) {
-      module.exports = { canonicalMinutes: canonicalMinutes, stripMarkdown: stripMarkdown, emptyFieldsOf: emptyFieldsOf, formatMinutes: formatMinutes, maskForAI: maskForAI, summarizeLocal: summarizeLocal, checkText: checkText, extractText: extractText, tidyMemo: tidyMemo, fieldText: fieldText, replacePlaceholders: replacePlaceholders, fillTemplate: fillTemplate, hasPlaceholders: hasPlaceholders, guessTarget: guessTarget, buildFilename: buildFilename, buildValues: buildValues, quote: quote, SUB: SUB, MF: MF, today: today };
+      module.exports = { genkaFill: genkaFill, billRowsOf: billRowsOf, excelSerial: excelSerial, isGenkaBook: isGenkaBook, canonicalMinutes: canonicalMinutes, stripMarkdown: stripMarkdown, emptyFieldsOf: emptyFieldsOf, formatMinutes: formatMinutes, maskForAI: maskForAI, summarizeLocal: summarizeLocal, checkText: checkText, extractText: extractText, tidyMemo: tidyMemo, fieldText: fieldText, replacePlaceholders: replacePlaceholders, fillTemplate: fillTemplate, hasPlaceholders: hasPlaceholders, guessTarget: guessTarget, buildFilename: buildFilename, buildValues: buildValues, quote: quote, SUB: SUB, MF: MF, today: today };
     }
     return;
   }
@@ -712,6 +780,44 @@
     });
   }
 
+
+  // 請求くんから、この案件の請求を読む（案件くんの「案件番号」「決算期＋案件番号」のどちらかと、請求くんの案件番号が同じもの）
+  var BILL_KEY_LABELS = ['案件番号', '決算期＋案件番号'];
+  function billKeysOf(values) {
+    var out = [];
+    Object.keys(values || {}).forEach(function (k) {
+      var base = k.replace(/^[^0-9A-Za-zぁ-んァ-ヶ一-龠]+/, '');
+      if (BILL_KEY_LABELS.indexOf(base) >= 0 && values[k] && out.indexOf(values[k]) < 0) out.push(String(values[k]));
+    });
+    return out;
+  }
+  function loadBills(values) {
+    var keys = billKeysOf(values);
+    if (!keys.length) return Promise.resolve([]);
+    return Promise.all(keys.map(function (k) {
+      return api('GET', '/k/v1/records', { app: BILL.app, query: BILL.anken + ' = "' + k.replace(/["\\]/g, '') + '" limit 500' }).then(function (r) { return r.records || []; });
+    })).then(function (lists) {
+      var seen = {}, all = [];
+      lists.forEach(function (l) { l.forEach(function (r) { var id = r.$id && r.$id.value; if (id && seen[id]) return; if (id) seen[id] = 1; all.push(r); }); });
+      return all;
+    });
+  }
+  // 原価管理表を作るとき：請求くんの請求を、原価明細に入れる（読めなくても、書類は作る）
+  function withBills(ext, out, ctx) {
+    if (ext !== 'xlsx') return Promise.resolve(out);
+    return isGenkaBook(JSZip, out.data).then(function (yes) {
+      if (!yes) return out;
+      return loadBills(ctx.values).then(billRowsOf).then(function (rows) {
+        if (!rows.length) { out.billNote = '請求くん(829)に、この案件の請求が、まだありません。原価明細は、空のままです'; return out; }
+        return genkaFill(JSZip, out.data, rows).then(function (r) {
+          out.data = r.data;
+          out.billNote = '請求くんの請求を、原価明細に ' + r.count + ' 行、入れました（日付・業者名・内容・金額。区分で、材料費／外注費に振り分け）' + (r.over > 0 ? '。入りきらなかった ' + r.over + ' 行は、入れていません' : '');
+          return out;
+        });
+      }, function (e) { out.billNote = '請求くん(829)の請求を読めませんでした（' + ((e && e.message) || '') + '）。原価明細は、空のままです'; return out; });
+    });
+  }
+
   function createDoc(masterRec, ctx, extra) {
     var docName = fieldText(masterRec[MF.name]);
     var files = masterRec[MF.template].value;
@@ -725,10 +831,10 @@
       var version = (cur ? cur.version : 0) + 1;
       var blank = {}; ASK.forEach(function (a) { blank[a.key] = askDefault(a); });   // 入力されなかった項目の言葉（なければ空のまま入れて、あとで知らせる）
       var values = Object.assign(blank, ctx.values, extra || {}, { '版': 'v' + version, '書類名': docName });
-      return fillTemplate(JSZip, res[1], ext, values).then(function (out) {
+      return fillTemplate(JSZip, res[1], ext, values).then(function (out) { return withBills(ext, out, ctx); }).then(function (out) {
         var filename = buildFilename(ctx.projectName, docName, version, ext);
         return storeRow(record, ctx, docName, fieldText(masterRec[MF.stage]), version, filename, out.data).then(function (r) {
-          r.unknown = out.unknown; r.empty = out.empty;
+          r.unknown = out.unknown; r.empty = out.empty; r.billNote = out.billNote;
           return r;
         });
       });
@@ -1128,8 +1234,8 @@
             btn.disabled = true; setMsg('作成しています…', false);
             return makeOne(rec, extra).then(function (r) {
               saveAs(r.data, r.filename);
-              var stay = !!((r.unknown && r.unknown.length) || (r.empty && r.empty.length));
-              var base = (isMobile ? '保存しました：' : '保存してダウンロードしました：') + r.filename + unknownNote(r.unknown, r.empty);
+              var stay = !!((r.unknown && r.unknown.length) || (r.empty && r.empty.length) || r.billNote);
+              var base = (isMobile ? '保存しました：' : '保存してダウンロードしました：') + r.filename + unknownNote(r.unknown, r.empty) + (r.billNote ? '\n' + r.billNote : '');
               // 議事録は、保存と同時に、PDFも、案件に自動で保存する（承認は、待たない）
               var minutesDoc = asks.some(function (a) { return a.key === '議事録本文' || a.key === '議事録メモ'; });
               if (!(AUTO_PDF_MINUTES && minutesDoc && PDF_SERVER_URL && ctx.caps && ctx.caps.pdf)) { reloadSoon(base + (minutesDoc ? '\n（「PDFにして保存」を押すと、PDFも保存できます）' : ''), stay); return; }
@@ -1400,10 +1506,49 @@
     }, 500);
   }
 
+
+  // 書類関係のタブに、「この案件の請求（請求くん）」の一覧（読み取りだけ。案件番号が同じ請求を、請求くん(829)から読む）
+  var billToken = 0;
+  var ANKEN_CODES = { '案件番号': '案件番号_0', '決算期＋案件番号': '決算期_案件番号' };
+  function billBox(record) {
+    var my = ++billToken;
+    var values = {};
+    Object.keys(ANKEN_CODES).forEach(function (l) { var f = record[ANKEN_CODES[l]]; if (f && f.value) values[l] = f.value; });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-doc-bills]'), function (o) { if (o.parentNode) o.parentNode.removeChild(o); });
+    if (!billKeysOf(values).length) return;
+    var box = el('details', 'margin:4px 0 8px;border:1px solid #cfd8e3;border-radius:6px;background:#fff;padding:6px 10px;max-width:760px');
+    box.setAttribute('data-doc-bills', '1');
+    var head = el('summary', 'cursor:pointer;font-weight:bold;font-size:14px', 'この案件の請求（請求くん）　読み込み中…'); box.appendChild(head);
+    var body = el('div'); box.appendChild(body);
+    var yen = function (n) { return '¥' + Number(n || 0).toLocaleString('ja-JP'); };
+    loadBills(values).then(function (recs) {
+      if (my !== billToken) return;
+      var total = 0;
+      var rows = recs.map(function (r) { var st = r[BILL.subtotal] && Number(r[BILL.subtotal].value) || 0; total += st; return { date: (r[BILL.date] && r[BILL.date].value) || '', vendor: (r[BILL.vendor] && r[BILL.vendor].value) || '', kubun: (r[BILL.kubun] && r[BILL.kubun].value) || '', sub: st, status: (r[BILL.status] && r[BILL.status].value) || '' }; })
+        .sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; });
+      head.textContent = 'この案件の請求（請求くん）　' + rows.length + '件　税抜 ' + yen(total);
+      if (!rows.length) { body.appendChild(el('div', 'font-size:12px;color:#666;margin-top:6px', 'この案件の請求は、まだ、請求くんにありません。')); return; }
+      rows.forEach(function (x) {
+        body.appendChild(el('div', 'border-top:1px solid #eee;padding:5px 0;font-size:13px', x.date + '　' + x.vendor + '　［' + x.kubun + '］　' + yen(x.sub) + (x.status ? '　（' + x.status + '）' : '')));
+      });
+      body.appendChild(el('div', 'font-size:12px;color:#666;margin-top:4px', '原価管理表を「書類を作る」で作ると、この請求が、原価明細に入ります。'));
+    }, function () { if (my === billToken) { head.textContent = 'この案件の請求（請求くん）　読み込めませんでした'; body.appendChild(el('div', 'font-size:12px;color:#666;margin-top:6px', '請求くん(829)を読む権限が、ないかもしれません。書類は、これまでどおり、作れます。')); } });
+    var tries = 0;
+    var timer = setInterval(function () {
+      if (my !== billToken) { clearInterval(timer); if (box.parentNode) box.parentNode.removeChild(box); return; }
+      var hub = document.querySelector('[data-doc-hub]');
+      if (!hub) { if (++tries > 50 && !document.body.contains(box)) clearInterval(timer); return; }
+      var after = document.querySelector('[data-doc-saved]') || hub;
+      if (after.nextSibling !== box) after.parentNode.insertBefore(box, after.nextSibling);
+      box.style.display = hub.style.display === 'none' ? 'none' : 'block';
+    }, 500);
+  }
+
   function onShow(event) {
     if (typeof JSZip === 'undefined') { console.error('JSZipが読み込まれていません。JavaScriptの読み込み順を確認してください。'); return event; }
     var record = event.record, projectId = recApi.getId();
     try { savedBox(record); } catch (e) { console.error(e); }   // 書類関係のタブに、保存した書類の一覧
+    try { billBox(record); } catch (e) { console.error(e); }   // 書類関係のタブに、この案件の請求（請求くん）の一覧
     // 書類保管の表は、フォームの一番下（どのタブにも属さない行）にあり、タブ表示プラグインが、どれかのタブに出してしまう。
     // 詳細画面では、表を隠す（保存した書類は、書類関係のタブの一覧で見える。「編集」の画面では、表が出る）。フォームの行は、動かさない
     if (HIDE_TABLE_ON_DETAIL) { try { recApi.setFieldShown(SUB.table, false); } catch (e) { console.error(e); } }

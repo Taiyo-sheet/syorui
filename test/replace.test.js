@@ -255,3 +255,51 @@ test('summarizeLocal：見出しの言葉を言わない、ふつうの話し方
   assert.strictEqual(r['決定事項'], '着工は11月上旬ということで合意しました');
   assert.strictEqual(r['ToDo'], '｜鈴木｜見積書の再提出\n10/30｜山田｜工程表を共有する');
 });
+
+// ---------- 原価管理表：請求くんの請求を、原価明細に入れる ----------
+async function genkaBook(nRows = 150) {
+  const z = new JSZip();
+  z.file('[Content_Types].xml', '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>');
+  z.file('xl/workbook.xml', '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="プロット" sheetId="2" r:id="rId2"/><sheet name="原価管理" sheetId="1" r:id="rId1"/></sheets><calcPr fullCalcOnLoad="1"/></workbook>');
+  z.file('xl/_rels/workbook.xml.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="x/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="x/worksheet" Target="worksheets/sheet2.xml"/></Relationships>');
+  let rows = '<row r="3"><c r="E3" t="inlineStr"><is><t>{{案件名}}</t></is></c></row>';
+  for (let r = 24; r < 24 + nRows; r++) rows += `<row r="${r}"><c r="A${r}"><v>${r - 23}</v></c><c r="B${r}" s="3"/><c r="F${r}" s="4"></c><c r="R${r}" s="4"/><c r="AJ${r}" s="5"/><c r="AV${r}" s="5"/><c r="BD${r}"><f>SUM(AJ${r}:BC${r})</f></c></row>`;
+  z.file('xl/worksheets/sheet1.xml', '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>' + rows + '</sheetData></worksheet>');
+  z.file('xl/worksheets/sheet2.xml', '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="24"><c r="B24"/></row></sheetData></worksheet>');
+  return z.generateAsync({ type: 'nodebuffer' });
+}
+const bill = (date, vendor, kubun, items, sub) => ({
+  billing_date: { value: date }, vendor_name: { value: vendor }, kubun: { value: kubun }, subtotal: { value: String(sub || '') },
+  details: { value: items.map(([n, a]) => ({ value: { item_name: { value: n }, bill_amount: { value: String(a) } } })) },
+});
+
+test('原価管理表：請求くんの請求が、日付順に、数字のまま、科目の列に入る（業者名・内容は文字）', async () => {
+  const rows = lib.billRowsOf([
+    bill('2026-06-10', 'B工業', '発注連動', [['外注工事A', 200000]]),
+    bill('2026-06-08', 'A商事', '材料（発注なし）', [['電線', 12000], ['端子', 3000], ['値引き0円', 0]]),
+  ]);
+  assert.deepStrictEqual(rows.map((r) => [r.date, r.vendor, r.item, r.amount]), [['2026-06-08', 'A商事', '電線', 12000], ['2026-06-08', 'A商事', '端子', 3000], ['2026-06-10', 'B工業', '外注工事A', 200000]], '明細の1行が1行。0円は入れない');
+  const r = await lib.genkaFill(JSZip, await genkaBook(), rows);
+  assert.strictEqual(r.isGenka, true); assert.strictEqual(r.count, 3);
+  const x = await (await JSZip.loadAsync(r.data)).file('xl/worksheets/sheet1.xml').async('string');
+  const serial = lib.excelSerial('2026-06-08');
+  assert.strictEqual(serial, 46181, 'Excelの日付の数（2026-06-08）');
+  assert.match(x, new RegExp('<c r="B24" s="3"><v>' + serial + '</v></c>'), '日付は数字（月ごとの集計の計算式が動く）');
+  assert.match(x, /<c r="F24" s="4" t="inlineStr"><is><t xml:space="preserve">A商事<\/t><\/is><\/c>/);
+  assert.match(x, /<c r="R25" s="4" t="inlineStr"><is><t xml:space="preserve">端子<\/t>/);
+  assert.match(x, /<c r="AJ24" s="5"><v>12000<\/v><\/c>/, '材料（発注なし）→ 材料費の列');
+  assert.match(x, /<c r="AV26" s="5"><v>200000<\/v><\/c>/, '発注連動 → 外注費の列');
+  assert.match(x, /<c r="BD24"><f>SUM\(AJ24:BC24\)<\/f><\/c>/, '合計の計算式は、そのまま');
+  assert.match(x, /<c r="E3" t="inlineStr"><is><t>\{\{案件名\}\}<\/t>/, '明細以外は、触らない');
+  assert.match(x, /<c r="B27" s="3"\/>/, '請求のない行は、空のまま');
+});
+
+test('原価管理表：150行を超える分は入れずに知らせる／原価管理のシートがないExcelは、そのまま', async () => {
+  const many = Array.from({ length: 160 }, (_, i) => ({ date: '2026-06-01', vendor: 'V', item: '品' + i, kubun: '発注連動', amount: 1 }));
+  const r = await lib.genkaFill(JSZip, await genkaBook(), many);
+  assert.strictEqual(r.count, 150); assert.strictEqual(r.over, 10);
+  const plain = await (async () => { const z = new JSZip(); z.file('xl/workbook.xml', '<workbook xmlns="x"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>'); z.file('xl/_rels/workbook.xml.rels', '<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>'); z.file('xl/worksheets/sheet1.xml', '<worksheet/>'); return z.generateAsync({ type: 'nodebuffer' }); })();
+  assert.strictEqual(await lib.isGenkaBook(JSZip, plain), false);
+  assert.strictEqual((await lib.genkaFill(JSZip, plain, many)).isGenka, false);
+  assert.strictEqual(await lib.isGenkaBook(JSZip, await genkaBook()), true);
+});

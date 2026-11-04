@@ -398,6 +398,53 @@ test('画面：直したファイルを登録すると、そのPDFも案件に�
   } finally { await browser.close(); await mock.close(); }
 });
 
+test('画面：原価管理表は、請求くんの請求が原価明細に入る。書類関係に、この案件の請求の一覧が出る', { skip }, async () => {
+  const mock = createMock(); const url = await mock.listen();
+  const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
+  try {
+    await seed(mock);
+    // 請求くん(829)：この案件（案件番号 2026）の請求2件と、別の案件の請求1件
+    mock.addApp('829', '請求くん');
+    const bill = (anken, date, vendor, kubun, items, sub, st) => mock.addRecord('829', {
+      anken: { value: anken }, billing_date: { value: date }, vendor_name: { value: vendor }, kubun: { value: kubun }, subtotal: { value: String(sub) }, 'ステータス': { value: st },
+      details: { value: items.map(([n, amt]) => ({ value: { item_name: { value: n }, bill_amount: { value: String(amt) } } })) },
+    });
+    bill('2026', '2026-06-10', 'B工業', '発注連動', [['外注工事A', 200000]], 200000, '請求受領');
+    bill('2026', '2026-06-08', 'A商事', '材料（発注なし）', [['電線', 12000], ['端子', 3000]], 15000, '経理確認済');
+    bill('9999', '2026-06-09', '別案件の会社', '発注連動', [['関係ない', 777]], 777, '請求受領');
+    // 原価管理表の雛形（「原価管理」シートのあるExcel）
+    const z = new JSZip();
+    z.file('[Content_Types].xml', '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>');
+    z.file('xl/workbook.xml', '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="原価管理" sheetId="1" r:id="rId1"/></sheets></workbook>');
+    z.file('xl/_rels/workbook.xml.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="x/worksheet" Target="worksheets/sheet1.xml"/></Relationships>');
+    let rows = '<row r="3"><c r="E3" t="inlineStr"><is><t>{{案件名}}</t></is></c></row>';
+    for (let r = 24; r < 40; r++) rows += `<row r="${r}"><c r="B${r}" s="3"/><c r="F${r}" s="4"/><c r="R${r}" s="4"/><c r="AJ${r}" s="5"/><c r="AV${r}" s="5"/></row>`;
+    z.file('xl/worksheets/sheet1.xml', '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>' + rows + '</sheetData></worksheet>');
+    const kx = mock.addFile(await z.generateAsync({ type: 'nodebuffer' }), 'genka.xlsx');
+    mock.addRecord('10', { 書類名: { value: '原価管理表' }, 工程: { value: '請求・原価管理' }, 表示順: { value: '900' }, 説明: { value: '' }, 見られる立場: { value: ['営業'] }, 使用状況: { value: '使用中' }, 雛形: { value: [{ fileKey: kx, name: 'genka.xlsx' }] } });
+    const rec = Object.assign({}, RECORD, { 案件番号_0: { type: 'SINGLE_LINE_TEXT', value: '2026' } });
+    const { page, errors } = await openPage(browser, url, '/__page', rec);
+    // 書類関係：この案件の請求の一覧（別の案件の請求は出ない）
+    const bills = page.locator('[data-doc-bills]');
+    await bills.waitFor();
+    await page.waitForFunction(() => /2件/.test((document.querySelector('[data-doc-bills]') || {}).textContent || ''));
+    const bt = await bills.textContent();
+    assert.match(bt, /税抜 ¥215,000/); assert.match(bt, /A商事/); assert.match(bt, /B工業/); assert.ok(!/別案件の会社/.test(bt), '別の案件の請求は出ない');
+    // 原価管理表を作る
+    await page.locator('[data-doc-hub]').click(); await page.getByText('工程別の書類：').waitFor();
+    await page.locator('select').nth(0).selectOption('請求・原価管理');
+    await Promise.all([page.waitForEvent('download'), page.locator('div[style*="border-top"]', { hasText: '原価管理表' }).getByRole('button', { name: '作成して保存' }).click()]);
+    await page.getByText(/請求くんの請求を、原価明細に 3 行、入れました/).waitFor();
+    const row = mock.state.records['575'][0]['書類保管'].value[0].value;
+    const xml = await (await JSZip.loadAsync(mock.state.files[row['書類保管_ファイル'].value[0].fileKey].buf)).file('xl/worksheets/sheet1.xml').async('string');
+    assert.match(xml, /<c r="F24" s="4" t="inlineStr"><is><t xml:space="preserve">A商事<\/t>/, '請求日の順（A商事が先）');
+    assert.match(xml, /<c r="AJ24" s="5"><v>12000<\/v><\/c>/); assert.match(xml, /<c r="AJ25" s="5"><v>3000<\/v><\/c>/);
+    assert.match(xml, /<c r="AV26" s="5"><v>200000<\/v><\/c>/);
+    assert.ok(!/別案件の会社|関係ない/.test(xml), '別の案件の請求は入らない');
+    assert.deepStrictEqual(errors, []);
+  } finally { await browser.close(); await mock.close(); }
+});
+
 test('画面：案件くんの値が空のまま入る項目を、作成後に知らせる（自動では画面を更新しない）', { skip }, async () => {
   const mock = createMock(); const url = await mock.listen();
   const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
