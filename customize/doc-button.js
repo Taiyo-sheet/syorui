@@ -479,8 +479,10 @@
   var ORDER = { app: 824, anken: 'anken', total: 'subtotal', status: 'ステータス', fixed: ['業者へ送付済', '完了'] };
   // 見積くん(608)：この案件の、内定した（受注した）見積の、税抜合計を受注金額に、原価合計を受注原価に入れる（内定が複数あれば、レコード番号が新しいもの）
   var ESTIMATE = { app: 608, anken: 'anken', total: '税抜合計', cost: '原価合計', status: 'ステータス', no: '見積No', won: ['内定', '予算02作成案内'] };
+  // 予算02(735)：この案件の、承認済み（部長承認完了）の予算の、契約金額（税抜）を予算金額に、総原価を予算原価に入れる（複数あれば、レコード番号が新しいもの）。まだなければ、予算原価は、発注くんの注文の合計
+  var BUDGET = { app: 735, anken: 'anken', total: '契約金額_税抜合計', cost: '総原価合計02', status: 'ステータス', fixed: ['部長承認完了'] };
   var GENKA = { sheet: '原価管理', firstRow: 24, lastRow: 173, date: 'B', vendor: 'F', item: 'R',
-    cols: { '材料（発注なし）': 'AJ', '発注連動': 'AV' }, other: 'AV', budget: 'AQ3', wonAmount: 'AG2', wonCost: 'AG3', wonProfit: 'AG4', wonRate: 'AG5' };   // 区分から科目の列へ（材料→材料費、発注連動→外注費。それ以外は外注費）
+    cols: { '材料（発注なし）': 'AJ', '発注連動': 'AV' }, other: 'AV', budget: 'AQ3', budgetAmount: 'AQ2', wonAmount: 'AG2', wonCost: 'AG3', wonProfit: 'AG4', wonRate: 'AG5' };   // 区分から科目の列へ（材料→材料費、発注連動→外注費。それ以外は外注費）
   function xmlEsc(t) { return String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
   function excelSerial(iso) {
     var m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
@@ -513,6 +515,14 @@
     });
     return { count: n, total: sum };
   }
+  // 予算02のレコード → 承認済みの予算（なければ null）
+  function budget02Of(records) {
+    var ok = (records || []).filter(function (r) { return BUDGET.fixed.indexOf(r[BUDGET.status] && r[BUDGET.status].value) >= 0; });
+    if (!ok.length) return null;
+    ok.sort(function (a, b) { return Number(b.$id && b.$id.value || 0) - Number(a.$id && a.$id.value || 0); });
+    var r = ok[0];
+    return { total: Number((r[BUDGET.total] && r[BUDGET.total].value) || 0), cost: Number((r[BUDGET.cost] && r[BUDGET.cost].value) || 0), count: ok.length };
+  }
   // 見積くんのレコード → 受注した見積（内定以降。なければ null）
   function wonEstimateOf(records) {
     var won = (records || []).filter(function (r) { return ESTIMATE.won.indexOf(r[ESTIMATE.status] && r[ESTIMATE.status].value) >= 0; });
@@ -522,7 +532,7 @@
     return { total: Number((r[ESTIMATE.total] && r[ESTIMATE.total].value) || 0), cost: Number((r[ESTIMATE.cost] && r[ESTIMATE.cost].value) || 0), no: (r[ESTIMATE.no] && r[ESTIMATE.no].value) || '', count: won.length };
   }
   // 原価管理表（Excel）の「原価明細」に、行を入れる。金額・日付は、数字のまま入れる（合計や月ごとの集計の計算式が、動くように）
-  function genkaFill(JSZipLib, buf, rows, budget, won) {
+  function genkaFill(JSZipLib, buf, rows, budget, won, b02) {
     return JSZipLib.loadAsync(buf).then(function (zip) {
       var wbf = zip.file('xl/workbook.xml'), rf = zip.file('xl/_rels/workbook.xml.rels');
       if (!wbf || !rf) return { data: buf, count: 0, isGenka: false };
@@ -550,7 +560,8 @@
             if (x.item) setCell(GENKA.item + r, 's', x.item);
             setCell((GENKA.cols[x.kubun] || GENKA.other) + r, 'n', x.amount);
           });
-          if (budget && budget.count) setCell(GENKA.budget, 'n', budget.total);   // 予算原価（発注くんの注文の合計）
+          if (b02 && b02.total) { setCell(GENKA.budgetAmount, 'n', b02.total); setCell(GENKA.budget, 'n', b02.cost); }   // 予算（予算02の承認済み）：予算金額・予算原価
+          else if (budget && budget.count) setCell(GENKA.budget, 'n', budget.total);   // 予算02がまだなければ、予算原価は、発注くんの注文の合計
           if (won && won.total) {   // 受注（見積くんの内定した見積）。粗利は、予算と同じ形の計算式
             setCell(GENKA.wonAmount, 'n', won.total); setCell(GENKA.wonCost, 'n', won.cost);
             setCell(GENKA.wonProfit, 'f', GENKA.wonAmount + '-' + GENKA.wonCost); setCell(GENKA.wonRate, 'f', 'IF(' + GENKA.wonAmount + '=0,0,' + GENKA.wonProfit + '/' + GENKA.wonAmount + ')');
@@ -586,7 +597,7 @@
   // Node（テスト）から使うときは、ここまでの部品だけを渡して終わる
   if (typeof kintone === 'undefined') {
     if (typeof module !== 'undefined' && module.exports) {
-      module.exports = { genkaFill: genkaFill, billRowsOf: billRowsOf, orderBudgetOf: orderBudgetOf, wonEstimateOf: wonEstimateOf, excelSerial: excelSerial, isGenkaBook: isGenkaBook, canonicalMinutes: canonicalMinutes, stripMarkdown: stripMarkdown, emptyFieldsOf: emptyFieldsOf, formatMinutes: formatMinutes, maskForAI: maskForAI, summarizeLocal: summarizeLocal, checkText: checkText, extractText: extractText, tidyMemo: tidyMemo, fieldText: fieldText, replacePlaceholders: replacePlaceholders, fillTemplate: fillTemplate, hasPlaceholders: hasPlaceholders, guessTarget: guessTarget, buildFilename: buildFilename, buildValues: buildValues, quote: quote, SUB: SUB, MF: MF, today: today };
+      module.exports = { genkaFill: genkaFill, billRowsOf: billRowsOf, orderBudgetOf: orderBudgetOf, wonEstimateOf: wonEstimateOf, budget02Of: budget02Of, excelSerial: excelSerial, isGenkaBook: isGenkaBook, canonicalMinutes: canonicalMinutes, stripMarkdown: stripMarkdown, emptyFieldsOf: emptyFieldsOf, formatMinutes: formatMinutes, maskForAI: maskForAI, summarizeLocal: summarizeLocal, checkText: checkText, extractText: extractText, tidyMemo: tidyMemo, fieldText: fieldText, replacePlaceholders: replacePlaceholders, fillTemplate: fillTemplate, hasPlaceholders: hasPlaceholders, guessTarget: guessTarget, buildFilename: buildFilename, buildValues: buildValues, quote: quote, SUB: SUB, MF: MF, today: today };
     }
     return;
   }
@@ -852,6 +863,17 @@
       return all;
     });
   }
+  function loadBudgets(values) {
+    var keys = billKeysOf(values);
+    if (!keys.length) return Promise.resolve([]);
+    return Promise.all(keys.map(function (k) {
+      return api('GET', '/k/v1/records', { app: BUDGET.app, query: BUDGET.anken + ' = "' + k.replace(/["\\]/g, '') + '" limit 500' }).then(function (r) { return r.records || []; });
+    })).then(function (lists) {
+      var seen = {}, all = [];
+      lists.forEach(function (l) { l.forEach(function (r) { var id = r.$id && r.$id.value; if (id && seen[id]) return; if (id) seen[id] = 1; all.push(r); }); });
+      return all;
+    });
+  }
   // 原価管理表を作るとき：請求くんの請求を、原価明細に入れる（読めなくても、書類は作る）
   function withBills(ext, out, ctx) {
     if (ext !== 'xlsx') return Promise.resolve(out);
@@ -861,13 +883,16 @@
       var bills = loadBills(ctx.values).then(billRowsOf, function (e) { notes.push('請求くん(829)の請求を読めませんでした（' + ((e && e.message) || '') + '）。原価明細は、空のままです'); return []; });
       var orders = loadOrders(ctx.values).then(orderBudgetOf, function (e) { notes.push('発注くん(824)の注文を読めませんでした（' + ((e && e.message) || '') + '）。予算原価は、空のままです'); return { count: 0, total: 0 }; });
       var won = loadEstimates(ctx.values).then(wonEstimateOf, function (e) { notes.push('見積くん(608)の見積を読めませんでした（' + ((e && e.message) || '') + '）。受注金額・受注原価は、空のままです'); return null; });
-      return Promise.all([bills, orders, won]).then(function (res) {
-        var rows = res[0], budget = res[1], w = res[2];
-        return genkaFill(JSZip, out.data, rows, budget, w).then(function (r) {
+      var b02p = loadBudgets(ctx.values).then(budget02Of, function (e) { notes.push('予算02(735)を読めませんでした（' + ((e && e.message) || '') + '）。予算金額は、空のままです'); return null; });
+      return Promise.all([bills, orders, won, b02p]).then(function (res) {
+        var rows = res[0], budget = res[1], w = res[2], b02 = res[3];
+        return genkaFill(JSZip, out.data, rows, budget, w, b02).then(function (r) {
           out.data = r.data;
           if (rows.length) notes.push('請求くんの請求を、原価明細に ' + r.count + ' 行、入れました（日付・業者名・内容・金額。区分で、材料費／外注費に振り分け）' + (r.over > 0 ? '。入りきらなかった ' + r.over + ' 行は、入れていません' : ''));
           else notes.push('請求くんに、この案件の請求は、まだありません。原価明細は、空のままです');
-          if (budget.count) notes.push('発注くんの注文 ' + budget.count + ' 件（税抜 ¥' + budget.total.toLocaleString('ja-JP') + '）を、予算原価に入れました'); else notes.push('発注くんに、発注した注文は、まだありません。予算原価は、空のままです');
+          if (b02 && b02.total) notes.push('予算02の承認済みの予算を、予算金額（税抜 ¥' + b02.total.toLocaleString('ja-JP') + '）・予算原価（¥' + b02.cost.toLocaleString('ja-JP') + '）に入れました' + (b02.count > 1 ? '。承認済みが ' + b02.count + ' 件あるため、新しいものを使いました' : ''));
+          else if (budget.count) notes.push('予算02の承認済みの予算が、まだありません。予算原価には、発注くんの注文 ' + budget.count + ' 件（税抜 ¥' + budget.total.toLocaleString('ja-JP') + '）の合計を入れました');
+          else notes.push('予算02の承認済みの予算も、発注くんの注文も、まだありません。予算金額・予算原価は、空のままです');
           if (w && w.total) notes.push('見積くんの内定した見積' + (w.no ? '（' + w.no + '）' : '') + 'を、受注金額（税抜 ¥' + w.total.toLocaleString('ja-JP') + '）・受注原価（¥' + w.cost.toLocaleString('ja-JP') + '）に入れました' + (w.count > 1 ? '。内定した見積が ' + w.count + ' 件あるため、新しいものを使いました' : '')); else notes.push('見積くんに、内定した見積は、まだありません。受注金額・受注原価は、空のままです');
           out.billNote = notes.join('\n'); return out;
         });
@@ -1579,11 +1604,14 @@
     var body = el('div'); box.appendChild(body);
     var yen = function (n) { return '¥' + Number(n || 0).toLocaleString('ja-JP'); };
     var orderLine = el('div', 'font-size:12px;color:#444;margin-top:6px', '');
-    loadOrders(values).then(function (os) { var b = orderBudgetOf(os); orderLine.textContent = b.count ? '発注くんの注文（予算原価に入る）　' + b.count + '件　税抜 ' + yen(b.total) : '発注くんに、発注した注文は、まだありません。'; }, function () { orderLine.textContent = ''; });
+    loadOrders(values).then(function (os) { var b = orderBudgetOf(os); orderLine.textContent = b.count ? '発注くんの注文（予算02が未承認のとき、予算原価に入る）　' + b.count + '件　税抜 ' + yen(b.total) : '発注くんに、発注した注文は、まだありません。'; }, function () { orderLine.textContent = ''; });
     body.appendChild(orderLine);
     var wonLine = el('div', 'font-size:12px;color:#444;margin-top:2px', '');
     loadEstimates(values).then(function (es) { var w = wonEstimateOf(es); wonLine.textContent = w && w.total ? '見積くんの内定した見積' + (w.no ? '（' + w.no + '）' : '') + '（受注金額・受注原価に入る）　税抜 ' + yen(w.total) + '　原価 ' + yen(w.cost) : '見積くんに、内定した見積は、まだありません。'; }, function () { wonLine.textContent = ''; });
     body.appendChild(wonLine);
+    var b02Line = el('div', 'font-size:12px;color:#444;margin-top:2px', '');
+    loadBudgets(values).then(function (bs) { var b = budget02Of(bs); b02Line.textContent = b && b.total ? '予算02の承認済みの予算（予算金額・予算原価に入る）　契約金額 ' + yen(b.total) + '　総原価 ' + yen(b.cost) : '予算02に、承認済みの予算は、まだありません。'; }, function () { b02Line.textContent = ''; });
+    body.appendChild(b02Line);
     loadBills(values).then(function (recs) {
       if (my !== billToken) return;
       var total = 0;
