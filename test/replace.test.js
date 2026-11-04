@@ -262,7 +262,7 @@ async function genkaBook(nRows = 150) {
   z.file('[Content_Types].xml', '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>');
   z.file('xl/workbook.xml', '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="プロット" sheetId="2" r:id="rId2"/><sheet name="原価管理" sheetId="1" r:id="rId1"/></sheets><calcPr fullCalcOnLoad="1"/></workbook>');
   z.file('xl/_rels/workbook.xml.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="x/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="x/worksheet" Target="worksheets/sheet2.xml"/></Relationships>');
-  let rows = '<row r="3"><c r="E3" t="inlineStr"><is><t>{{案件名}}</t></is></c><c r="AQ3" s="6"/></row>';
+  let rows = '<row r="3"><c r="E3" t="inlineStr"><is><t>{{案件名}}</t></is></c><c r="AQ3" s="6"/><c r="AG2" s="7"/><c r="AG3" s="7"/><c r="AG4" s="7"/><c r="AG5" s="8"/></row>';
   for (let r = 24; r < 24 + nRows; r++) rows += `<row r="${r}"><c r="A${r}"><v>${r - 23}</v></c><c r="B${r}" s="3"/><c r="F${r}" s="4"></c><c r="R${r}" s="4"/><c r="AJ${r}" s="5"/><c r="AV${r}" s="5"/><c r="BD${r}"><f>SUM(AJ${r}:BC${r})</f></c></row>`;
   z.file('xl/worksheets/sheet1.xml', '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>' + rows + '</sheetData></worksheet>');
   z.file('xl/worksheets/sheet2.xml', '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="24"><c r="B24"/></row></sheetData></worksheet>');
@@ -313,4 +313,17 @@ test('原価管理表：発注くんの注文（業者へ送付済・完了）�
   assert.match(x, /<c r="AQ3" s="6"><v>5250000<\/v><\/c>/, '予算原価（AQ3）に、数字で入る');
   const none = await lib.genkaFill(JSZip, await genkaBook(), [], { count: 0, total: 0 });
   assert.match(await (await JSZip.loadAsync(none.data)).file('xl/worksheets/sheet1.xml').async('string'), /<c r="AQ3" s="6"\/>/, '注文がなければ、空のまま');
+});
+
+test('原価管理表：見積くんの内定した見積が、受注金額・受注原価に入る（粗利は計算式）。内定がなければ空', async () => {
+  const es = (id, st, total, cost, no) => ({ $id: { value: String(id) }, 'ステータス': { value: st }, '税抜合計': { value: String(total) }, '原価合計': { value: String(cost) }, '見積No': { value: no } });
+  assert.strictEqual(lib.wonEstimateOf([es(1, '見積作成中', 100, 50, 'A'), es(2, '部長承認完了', 200, 90, 'B')]), null, '内定の前は、受注として入れない');
+  const w = lib.wonEstimateOf([es(3, '内定', 1000000, 700000, 'TS-1'), es(5, '予算02作成案内', 1200000, 800000, 'TS-2'), es(4, '見積作成中', 1, 1, 'X')]);
+  assert.deepStrictEqual(w, { total: 1200000, cost: 800000, no: 'TS-2', count: 2 }, '内定以降のうち、レコード番号が新しいもの');
+  const r = await lib.genkaFill(JSZip, await genkaBook(), [], { count: 0, total: 0 }, w);
+  const x = await (await JSZip.loadAsync(r.data)).file('xl/worksheets/sheet1.xml').async('string');
+  assert.match(x, /<c r="AG2" s="7"><v>1200000<\/v><\/c>/); assert.match(x, /<c r="AG3" s="7"><v>800000<\/v><\/c>/);
+  assert.match(x, /<c r="AG4" s="7"><f>AG2-AG3<\/f><\/c>/); assert.match(x, /<c r="AG5" s="8"><f>IF\(AG2=0,0,AG4\/AG2\)<\/f><\/c>/);
+  const none = await lib.genkaFill(JSZip, await genkaBook(), [], { count: 0, total: 0 }, null);
+  assert.match(await (await JSZip.loadAsync(none.data)).file('xl/worksheets/sheet1.xml').async('string'), /<c r="AG2" s="7"\/>/, '内定がなければ、空のまま');
 });

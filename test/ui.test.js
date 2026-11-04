@@ -416,12 +416,16 @@ test('画面：原価管理表は、請求くんの請求が原価明細に入�
     mock.addApp('824', '発注くん');
     const ord = (anken, st, v) => mock.addRecord('824', { anken: { value: anken }, 'ステータス': { value: st }, subtotal: { value: String(v) } });
     ord('2026', '業者へ送付済', 300000); ord('2026', '完了', 100000); ord('2026', '作成中', 555555); ord('9999', '完了', 7777777);
+    // 見積くん(608)：この案件の見積（作成中1件・内定1件）と、別の案件の内定
+    mock.addApp('608', '見積くん');
+    const est = (anken, st, total, cost, no) => mock.addRecord('608', { anken: { value: anken }, 'ステータス': { value: st }, '税抜合計': { value: String(total) }, '原価合計': { value: String(cost) }, '見積No': { value: no } });
+    est('2026', '見積作成中', 111, 11, 'TS-A'); est('2026', '内定', 2000000, 1500000, 'TS-B'); est('9999', '内定', 99999999, 1, 'TS-Z');
     // 原価管理表の雛形（「原価管理」シートのあるExcel）
     const z = new JSZip();
     z.file('[Content_Types].xml', '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>');
     z.file('xl/workbook.xml', '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="原価管理" sheetId="1" r:id="rId1"/></sheets></workbook>');
     z.file('xl/_rels/workbook.xml.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="x/worksheet" Target="worksheets/sheet1.xml"/></Relationships>');
-    let rows = '<row r="3"><c r="E3" t="inlineStr"><is><t>{{案件名}}</t></is></c><c r="AQ3" s="6"/></row>';
+    let rows = '<row r="3"><c r="E3" t="inlineStr"><is><t>{{案件名}}</t></is></c><c r="AQ3" s="6"/><c r="AG2" s="7"/><c r="AG3" s="7"/><c r="AG4" s="7"/><c r="AG5" s="8"/></row>';
     for (let r = 24; r < 40; r++) rows += `<row r="${r}"><c r="B${r}" s="3"/><c r="F${r}" s="4"/><c r="R${r}" s="4"/><c r="AJ${r}" s="5"/><c r="AV${r}" s="5"/></row>`;
     z.file('xl/worksheets/sheet1.xml', '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>' + rows + '</sheetData></worksheet>');
     const kx = mock.addFile(await z.generateAsync({ type: 'nodebuffer' }), 'genka.xlsx');
@@ -433,13 +437,14 @@ test('画面：原価管理表は、請求くんの請求が原価明細に入�
     await bills.waitFor();
     await page.waitForFunction(() => /2件/.test((document.querySelector('[data-doc-bills]') || {}).textContent || ''));
     const bt = await bills.textContent();
-    assert.match(bt, /税抜 ¥215,000/); await page.waitForFunction(() => /発注くんの注文（予算原価に入る）　2件　税抜 ¥400,000/.test(document.querySelector('[data-doc-bills]').textContent)); assert.match(bt, /A商事/); assert.match(bt, /B工業/); assert.ok(!/別案件の会社/.test(bt), '別の案件の請求は出ない');
+    assert.match(bt, /税抜 ¥215,000/); await page.waitForFunction(() => /発注くんの注文（予算原価に入る）　2件　税抜 ¥400,000/.test(document.querySelector('[data-doc-bills]').textContent) && /内定した見積（TS-B）（受注金額・受注原価に入る）　税抜 ¥2,000,000　原価 ¥1,500,000/.test(document.querySelector('[data-doc-bills]').textContent)); assert.match(bt, /A商事/); assert.match(bt, /B工業/); assert.ok(!/別案件の会社/.test(bt), '別の案件の請求は出ない');
     // 原価管理表を作る
     await page.locator('[data-doc-hub]').click(); await page.getByText('工程別の書類：').waitFor();
     await page.locator('select').nth(0).selectOption('請求・原価管理');
     await Promise.all([page.waitForEvent('download'), page.locator('div[style*="border-top"]', { hasText: '原価管理表' }).getByRole('button', { name: '作成して保存' }).click()]);
     await page.getByText(/請求くんの請求を、原価明細に 3 行、入れました/).waitFor();
     await page.getByText(/発注くんの注文 2 件（税抜 ¥400,000）を、予算原価に入れました/).waitFor();
+    await page.getByText(/見積くんの内定した見積（TS-B）を、受注金額（税抜 ¥2,000,000）・受注原価（¥1,500,000）に入れました/).waitFor();
     const row = mock.state.records['575'][0]['書類保管'].value[0].value;
     const xml = await (await JSZip.loadAsync(mock.state.files[row['書類保管_ファイル'].value[0].fileKey].buf)).file('xl/worksheets/sheet1.xml').async('string');
     assert.match(xml, /<c r="F24" s="4" t="inlineStr"><is><t xml:space="preserve">A商事<\/t>/, '請求日の順（A商事が先）');
@@ -447,6 +452,7 @@ test('画面：原価管理表は、請求くんの請求が原価明細に入�
     assert.match(xml, /<c r="AV26" s="5"><v>200000<\/v><\/c>/);
     assert.ok(!/別案件の会社|関係ない/.test(xml), '別の案件の請求は入らない');
     assert.match(xml, /<c r="AQ3" s="6"><v>400000<\/v><\/c>/, '予算原価＝発注した注文の合計（作成中・別の案件は入らない）');
+    assert.match(xml, /<c r="AG2" s="7"><v>2000000<\/v><\/c>/, '受注金額＝内定した見積の税抜合計'); assert.match(xml, /<c r="AG3" s="7"><v>1500000<\/v><\/c>/); assert.match(xml, /<c r="AG4" s="7"><f>AG2-AG3<\/f><\/c>/);
     assert.deepStrictEqual(errors, []);
   } finally { await browser.close(); await mock.close(); }
 });
