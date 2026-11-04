@@ -475,8 +475,10 @@
   // ---------- 原価管理表：請求くん(829)の請求を、原価明細に入れる ----------
   // 請求くんの項目コード。案件番号（案件くんの「案件番号」と同じ値）で、その案件の請求を引く
   var BILL = { app: 829, anken: 'anken', date: 'billing_date', vendor: 'vendor_name', kubun: 'kubun', table: 'details', item: 'item_name', amount: 'bill_amount', status: 'ステータス', subtotal: 'subtotal' };
+  // 発注くん(824)の注文：この案件の、発注した（業者へ送付済・完了）注文の、税抜の合計を、予算原価に入れる
+  var ORDER = { app: 824, anken: 'anken', total: 'subtotal', status: 'ステータス', fixed: ['業者へ送付済', '完了'] };
   var GENKA = { sheet: '原価管理', firstRow: 24, lastRow: 173, date: 'B', vendor: 'F', item: 'R',
-    cols: { '材料（発注なし）': 'AJ', '発注連動': 'AV' }, other: 'AV' };   // 区分から科目の列へ（材料→材料費、発注連動→外注費。それ以外は外注費）
+    cols: { '材料（発注なし）': 'AJ', '発注連動': 'AV' }, other: 'AV', budget: 'AQ3' };   // 区分から科目の列へ（材料→材料費、発注連動→外注費。それ以外は外注費）
   function xmlEsc(t) { return String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
   function excelSerial(iso) {
     var m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
@@ -498,8 +500,19 @@
     });
     return rows.sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; });
   }
+  // 発注くんのレコード → 予算原価（発注した注文の、税抜の合計と件数）
+  function orderBudgetOf(records) {
+    var n = 0, sum = 0;
+    (records || []).forEach(function (r) {
+      var st = r[ORDER.status] && r[ORDER.status].value;
+      if (ORDER.fixed.indexOf(st) < 0) return;
+      var v = Number((r[ORDER.total] && r[ORDER.total].value) || 0);
+      if (!v) return; n++; sum += v;
+    });
+    return { count: n, total: sum };
+  }
   // 原価管理表（Excel）の「原価明細」に、行を入れる。金額・日付は、数字のまま入れる（合計や月ごとの集計の計算式が、動くように）
-  function genkaFill(JSZipLib, buf, rows) {
+  function genkaFill(JSZipLib, buf, rows, budget) {
     return JSZipLib.loadAsync(buf).then(function (zip) {
       var wbf = zip.file('xl/workbook.xml'), rf = zip.file('xl/_rels/workbook.xml.rels');
       if (!wbf || !rf) return { data: buf, count: 0, isGenka: false };
@@ -527,6 +540,7 @@
             if (x.item) setCell(GENKA.item + r, 's', x.item);
             setCell((GENKA.cols[x.kubun] || GENKA.other) + r, 'n', x.amount);
           });
+          if (budget && budget.count) setCell(GENKA.budget, 'n', budget.total);   // 予算原価（発注くんの注文の合計）
           zip.file(path, xml);
           return zip.generateAsync({ type: 'arraybuffer' }).then(function (data) { return { data: data, count: used.length, over: rows.length - used.length, skipped: skipped, isGenka: true }; });
         });
@@ -558,7 +572,7 @@
   // Node（テスト）から使うときは、ここまでの部品だけを渡して終わる
   if (typeof kintone === 'undefined') {
     if (typeof module !== 'undefined' && module.exports) {
-      module.exports = { genkaFill: genkaFill, billRowsOf: billRowsOf, excelSerial: excelSerial, isGenkaBook: isGenkaBook, canonicalMinutes: canonicalMinutes, stripMarkdown: stripMarkdown, emptyFieldsOf: emptyFieldsOf, formatMinutes: formatMinutes, maskForAI: maskForAI, summarizeLocal: summarizeLocal, checkText: checkText, extractText: extractText, tidyMemo: tidyMemo, fieldText: fieldText, replacePlaceholders: replacePlaceholders, fillTemplate: fillTemplate, hasPlaceholders: hasPlaceholders, guessTarget: guessTarget, buildFilename: buildFilename, buildValues: buildValues, quote: quote, SUB: SUB, MF: MF, today: today };
+      module.exports = { genkaFill: genkaFill, billRowsOf: billRowsOf, orderBudgetOf: orderBudgetOf, excelSerial: excelSerial, isGenkaBook: isGenkaBook, canonicalMinutes: canonicalMinutes, stripMarkdown: stripMarkdown, emptyFieldsOf: emptyFieldsOf, formatMinutes: formatMinutes, maskForAI: maskForAI, summarizeLocal: summarizeLocal, checkText: checkText, extractText: extractText, tidyMemo: tidyMemo, fieldText: fieldText, replacePlaceholders: replacePlaceholders, fillTemplate: fillTemplate, hasPlaceholders: hasPlaceholders, guessTarget: guessTarget, buildFilename: buildFilename, buildValues: buildValues, quote: quote, SUB: SUB, MF: MF, today: today };
     }
     return;
   }
@@ -802,19 +816,36 @@
       return all;
     });
   }
+  function loadOrders(values) {
+    var keys = billKeysOf(values);
+    if (!keys.length) return Promise.resolve([]);
+    return Promise.all(keys.map(function (k) {
+      return api('GET', '/k/v1/records', { app: ORDER.app, query: ORDER.anken + ' = "' + k.replace(/["\\]/g, '') + '" limit 500' }).then(function (r) { return r.records || []; });
+    })).then(function (lists) {
+      var seen = {}, all = [];
+      lists.forEach(function (l) { l.forEach(function (r) { var id = r.$id && r.$id.value; if (id && seen[id]) return; if (id) seen[id] = 1; all.push(r); }); });
+      return all;
+    });
+  }
   // 原価管理表を作るとき：請求くんの請求を、原価明細に入れる（読めなくても、書類は作る）
   function withBills(ext, out, ctx) {
     if (ext !== 'xlsx') return Promise.resolve(out);
     return isGenkaBook(JSZip, out.data).then(function (yes) {
       if (!yes) return out;
-      return loadBills(ctx.values).then(billRowsOf).then(function (rows) {
-        if (!rows.length) { out.billNote = '請求くん(829)に、この案件の請求が、まだありません。原価明細は、空のままです'; return out; }
-        return genkaFill(JSZip, out.data, rows).then(function (r) {
+      var notes = [];
+      var bills = loadBills(ctx.values).then(billRowsOf, function (e) { notes.push('請求くん(829)の請求を読めませんでした（' + ((e && e.message) || '') + '）。原価明細は、空のままです'); return []; });
+      var orders = loadOrders(ctx.values).then(orderBudgetOf, function (e) { notes.push('発注くん(824)の注文を読めませんでした（' + ((e && e.message) || '') + '）。予算原価は、空のままです'); return { count: 0, total: 0 }; });
+      return Promise.all([bills, orders]).then(function (res) {
+        var rows = res[0], budget = res[1];
+        if (!rows.length && !budget.count) { if (!notes.length) notes.push('請求くん・発注くんに、この案件の請求・注文が、まだありません。原価明細・予算原価は、空のままです'); out.billNote = notes.join('\n'); return out; }
+        return genkaFill(JSZip, out.data, rows, budget).then(function (r) {
           out.data = r.data;
-          out.billNote = '請求くんの請求を、原価明細に ' + r.count + ' 行、入れました（日付・業者名・内容・金額。区分で、材料費／外注費に振り分け）' + (r.over > 0 ? '。入りきらなかった ' + r.over + ' 行は、入れていません' : '');
-          return out;
+          if (rows.length) notes.push('請求くんの請求を、原価明細に ' + r.count + ' 行、入れました（日付・業者名・内容・金額。区分で、材料費／外注費に振り分け）' + (r.over > 0 ? '。入りきらなかった ' + r.over + ' 行は、入れていません' : ''));
+          else notes.push('請求くんに、この案件の請求は、まだありません。原価明細は、空のままです');
+          if (budget.count) notes.push('発注くんの注文 ' + budget.count + ' 件（税抜 ¥' + budget.total.toLocaleString('ja-JP') + '）を、予算原価に入れました'); else notes.push('発注くんに、発注した注文は、まだありません。予算原価は、空のままです');
+          out.billNote = notes.join('\n'); return out;
         });
-      }, function (e) { out.billNote = '請求くん(829)の請求を読めませんでした（' + ((e && e.message) || '') + '）。原価明細は、空のままです'; return out; });
+      });
     });
   }
 
@@ -1521,6 +1552,9 @@
     var head = el('summary', 'cursor:pointer;font-weight:bold;font-size:14px', 'この案件の請求（請求くん）　読み込み中…'); box.appendChild(head);
     var body = el('div'); box.appendChild(body);
     var yen = function (n) { return '¥' + Number(n || 0).toLocaleString('ja-JP'); };
+    var orderLine = el('div', 'font-size:12px;color:#444;margin-top:6px', '');
+    loadOrders(values).then(function (os) { var b = orderBudgetOf(os); orderLine.textContent = b.count ? '発注くんの注文（予算原価に入る）　' + b.count + '件　税抜 ' + yen(b.total) : '発注くんに、発注した注文は、まだありません。'; }, function () { orderLine.textContent = ''; });
+    body.appendChild(orderLine);
     loadBills(values).then(function (recs) {
       if (my !== billToken) return;
       var total = 0;

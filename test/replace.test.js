@@ -262,7 +262,7 @@ async function genkaBook(nRows = 150) {
   z.file('[Content_Types].xml', '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>');
   z.file('xl/workbook.xml', '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="プロット" sheetId="2" r:id="rId2"/><sheet name="原価管理" sheetId="1" r:id="rId1"/></sheets><calcPr fullCalcOnLoad="1"/></workbook>');
   z.file('xl/_rels/workbook.xml.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="x/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="x/worksheet" Target="worksheets/sheet2.xml"/></Relationships>');
-  let rows = '<row r="3"><c r="E3" t="inlineStr"><is><t>{{案件名}}</t></is></c></row>';
+  let rows = '<row r="3"><c r="E3" t="inlineStr"><is><t>{{案件名}}</t></is></c><c r="AQ3" s="6"/></row>';
   for (let r = 24; r < 24 + nRows; r++) rows += `<row r="${r}"><c r="A${r}"><v>${r - 23}</v></c><c r="B${r}" s="3"/><c r="F${r}" s="4"></c><c r="R${r}" s="4"/><c r="AJ${r}" s="5"/><c r="AV${r}" s="5"/><c r="BD${r}"><f>SUM(AJ${r}:BC${r})</f></c></row>`;
   z.file('xl/worksheets/sheet1.xml', '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>' + rows + '</sheetData></worksheet>');
   z.file('xl/worksheets/sheet2.xml', '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="24"><c r="B24"/></row></sheetData></worksheet>');
@@ -302,4 +302,15 @@ test('原価管理表：150行を超える分は入れずに知らせる／原�
   assert.strictEqual(await lib.isGenkaBook(JSZip, plain), false);
   assert.strictEqual((await lib.genkaFill(JSZip, plain, many)).isGenka, false);
   assert.strictEqual(await lib.isGenkaBook(JSZip, await genkaBook()), true);
+});
+
+test('原価管理表：発注くんの注文（業者へ送付済・完了）の税抜合計が、予算原価に入る', async () => {
+  const od = (st, v) => ({ 'ステータス': { value: st }, subtotal: { value: String(v) } });
+  const b = lib.orderBudgetOf([od('業者へ送付済', 250000), od('完了', 5000000), od('作成中', 999), od('社内承認待ち', 888), od('完了', 0)]);
+  assert.deepStrictEqual(b, { count: 2, total: 5250000 }, '発注した注文だけ（作成中・承認待ち・0円は入れない）');
+  const r = await lib.genkaFill(JSZip, await genkaBook(), [], b);
+  const x = await (await JSZip.loadAsync(r.data)).file('xl/worksheets/sheet1.xml').async('string');
+  assert.match(x, /<c r="AQ3" s="6"><v>5250000<\/v><\/c>/, '予算原価（AQ3）に、数字で入る');
+  const none = await lib.genkaFill(JSZip, await genkaBook(), [], { count: 0, total: 0 });
+  assert.match(await (await JSZip.loadAsync(none.data)).file('xl/worksheets/sheet1.xml').async('string'), /<c r="AQ3" s="6"\/>/, '注文がなければ、空のまま');
 });
