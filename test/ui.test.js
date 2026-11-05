@@ -92,6 +92,10 @@ async function openPage(browser, url, path, record, opt) {
   return { page, errors, ctx };
 }
 
+async function openStage(page, st) {
+  // 他の工程は、閉じる（以前の画面と同じく、見えるのは1つの工程だけにして、同名の書類・ボタンが重ならないようにする）
+  await page.locator('details[data-stage][open]').evaluateAll((os, keep) => os.forEach((o) => { if (o.getAttribute('data-stage') !== keep) o.open = false; }), st);
+  const d = page.locator('details[data-stage="' + st + '"]'); if ((await d.getAttribute('open')) === null) await d.locator('summary').click(); await d.locator('[data-doc-row], [data-stage-batch]').first().waitFor(); }
 const skip = !chromium || !CHROMIUM ? 'Chromium が見つからないためスキップ' : false;
 
 test('画面：ボタン表示→工程・立場の絞り込み→作成して保存→最新vN→v2作成', { skip }, async () => {
@@ -105,23 +109,23 @@ test('画面：ボタン表示→工程・立場の絞り込み→作成して�
     await page.getByText('工程別の書類：東京Aビル 改修工事').waitFor();
 
     // 工程の選択肢は書類マスタから（廃止は出ない）／立場の選択肢も書類マスタから
-    const stages = await page.locator('select').nth(0).locator('option').evaluateAll((os) => os.map((o) => o.value));
+    const stages = await page.locator('details[data-stage]').evaluateAll((os) => os.map((o) => o.getAttribute('data-stage')));
     assert.deepStrictEqual(stages, ['情報取得・現状確認', '打合せ・見積・提案']);
     // 工程の選択肢に「作成済 x/y」（雛形のまま使う書類・雛形が未登録の書類は数えない）
-    await page.waitForFunction(() => /打合せ・見積・提案（作成済 0\/1）/.test(document.querySelectorAll('select')[0].textContent));
-    assert.match(await page.locator('select').nth(0).textContent(), /情報取得・現状確認（作成済 0\/1）/);
-    const auds = await page.locator('select').nth(1).locator('option').allTextContents();
+    await page.waitForFunction(() => /打合せ・見積・提案（作成済 0\/1）/.test(document.querySelector('details[data-stage]').parentNode.textContent));
+    assert.match(await page.locator('details[data-stage]').first().locator('summary').textContent(), /情報取得・現状確認（作成済 0\/1）/);
+    const auds = await page.locator('select').nth(0).locator('option').allTextContents();
     assert.deepStrictEqual(auds, ['すべての立場', '営業', 'TS計画推進', '施工店']);
 
     // 雛形が未登録の書類は押せない
     assert.strictEqual(await page.getByRole('button', { name: '雛形が未登録' }).isDisabled(), true);
     // 立場で絞り込む（TS計画推進 → 現状確認シートだけ）
-    await page.locator('select').nth(1).selectOption('TS計画推進');
+    await page.locator('select').nth(0).selectOption('TS計画推進');
     assert.strictEqual(await page.getByText('初期リスク抽出シート').count(), 0);
-    await page.locator('select').nth(1).selectOption('');
+    await page.locator('select').nth(0).selectOption('');
 
     // 工程を切り替えて、作成して保存
-    await page.locator('select').nth(0).selectOption('打合せ・見積・提案');
+    await openStage(page, '打合せ・見積・提案');
     // 作成すると、保存と同時に、その場でダウンロードされる
     const [dl1] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: '作成して保存' }).click()]);
     await page.getByText(/保存してダウンロードしました：東京Aビル 改修工事_打合せ議事次第_v1\.docx/).waitFor();
@@ -143,9 +147,9 @@ test('画面：ボタン表示→工程・立場の絞り込み→作成して�
     await page.reload();
     await page.evaluate((r) => window.__fire(r), RECORD);
     await page.locator('[data-doc-hub]').click();
-    await page.locator('select').nth(0).selectOption('打合せ・見積・提案');
+    await openStage(page, '打合せ・見積・提案');
     await page.getByText('最新 v1').waitFor();
-    assert.match(await page.locator('select').nth(0).textContent(), /打合せ・見積・提案（作成済 1\/1）/);
+    assert.match(await page.locator('details[data-stage="打合せ・見積・提案"] summary').textContent(), /打合せ・見積・提案（作成済 1\/1）/);
     // 「開く」で、保存した書類（v1）が取り出せる
     const [dlOpen] = await Promise.all([page.waitForEvent('download'), page.getByRole('link', { name: '開く' }).click()]);
     const again = []; for await (const c of await dlOpen.createReadStream()) again.push(c);
@@ -182,7 +186,7 @@ test('画面（モバイル）：ボタンが出て、作成して保存でき�
     const { page, errors } = await openPage(browser, url, '/k/m/__page');
     await page.locator('[data-doc-hub]').click();
     await page.getByText('工程別の書類：').waitFor();
-    await page.locator('select').nth(0).selectOption('打合せ・見積・提案');
+    await openStage(page, '打合せ・見積・提案');
     await page.getByRole('button', { name: '作成して保存' }).click();
     await page.locator('[data-doc-text]').waitFor();   // スマホでは、ファイルを開けないため、中身を文字で出す
     assert.match(await page.locator('[data-doc-text]').textContent(), /東京Aビル 改修工事/);
@@ -202,7 +206,7 @@ test('画面：{{ }}のない雛形は「雛形を開く」（そのまま保存
     page.on('dialog', (d) => dialogs.push(d.message()));
     await page.locator('[data-doc-hub]').click();
     await page.getByText('工程別の書類：').waitFor();
-    await page.locator('select').nth(0).selectOption('打合せ・見積・提案');
+    await openStage(page, '打合せ・見積・提案');
     // 判定が終わると、{{ }}ありは「作成して保存」、なしは「雛形を開く」になる
     await page.getByRole('button', { name: '作成して保存' }).waitFor();
     await page.getByRole('button', { name: '雛形を開く' }).waitFor();
@@ -238,32 +242,32 @@ test('画面：対象（橋梁／一般道路）で、仕様書を出し分け�
     const { page, errors } = await openPage(browser, url, '/__page');
     await page.locator('[data-doc-hub]').click();
     await page.getByText('工程別の書類：').waitFor();
-    await page.locator('select').nth(0).selectOption('施工前の書類');
+    await openStage(page, '施工前の書類');
     // 対象の選択が出る（立場の次）。案件名「東京Aビル 改修工事」には橋がないので、初期は「一般道路」
-    const targets = await page.locator('select').nth(2).locator('option').evaluateAll((os) => os.map((o) => o.textContent));
+    const targets = await page.locator('select').nth(1).locator('option').evaluateAll((os) => os.map((o) => o.textContent));
     assert.deepStrictEqual(targets, ['すべての対象', '橋梁', '一般道路']);
-    assert.strictEqual(await page.locator('select').nth(2).inputValue(), '一般道路');
+    assert.strictEqual(await page.locator('select').nth(1).inputValue(), '一般道路');
     await page.getByText('対象は、案件名から「一般道路」と判断して選びました').waitFor();
     assert.strictEqual(await page.getByText('仕様書（橋梁）', { exact: true }).count(), 0);
     // 「すべての対象」にすると、全部見える
-    await page.locator('select').nth(2).selectOption('');
+    await page.locator('select').nth(1).selectOption('');
     await page.getByText('仕様書（橋梁）', { exact: true }).waitFor();
     assert.strictEqual(await page.getByText('仕様書（一般道路）', { exact: true }).count(), 1);
     assert.strictEqual(await page.getByText('作業手順書').count() >= 1, true);
     // 橋梁を選ぶ → 橋梁用と共通だけ
-    await page.locator('select').nth(2).selectOption('橋梁');
+    await page.locator('select').nth(1).selectOption('橋梁');
     assert.strictEqual(await page.getByText('仕様書（橋梁）', { exact: true }).count(), 1);
     assert.strictEqual(await page.getByText('仕様書（一般道路）', { exact: true }).count(), 0);
     assert.strictEqual(await page.getByText('作業手順書').count() >= 1, true);
     await page.waitForFunction(() => /施工前の書類（作成済 0\/2）/.test(document.querySelectorAll('select')[0].textContent));
     // 一般道路を選ぶ → 一般道路用と共通だけ
-    await page.locator('select').nth(2).selectOption('一般道路');
+    await page.locator('select').nth(1).selectOption('一般道路');
     assert.strictEqual(await page.getByText('仕様書（橋梁）', { exact: true }).count(), 0);
     assert.strictEqual(await page.getByText('仕様書（一般道路）', { exact: true }).count(), 1);
     // 一般道路用の仕様書を作成 → 書類名ごとに版が分かれて保存される
     await page.getByRole('button', { name: '作成して保存' }).first().waitFor();
     assert.strictEqual(await page.getByText('【一般道路用】').count(), 1, '説明の行に対象を表示');
-    await page.locator('div[style*="border-top"]', { hasText: '仕様書（一般道路）' }).getByRole('button').click();
+    await page.locator('div[data-doc-row]', { hasText: '仕様書（一般道路）' }).getByRole('button').click();
     await page.getByText(/_仕様書（一般道路）_v1\.docx/).waitFor();
     assert.deepStrictEqual(stored(mock).map((r) => r.name), ['仕様書（一般道路）']);
     assert.deepStrictEqual(errors, []);
@@ -298,12 +302,12 @@ test('画面：案件名に「橋」があれば、対象は自動で「橋梁�
     const { page, errors } = await openPage(browser, url, '/__page', bridge);
     await page.locator('[data-doc-hub]').click();
     await page.getByText('工程別の書類：').waitFor();
-    await page.locator('select').nth(0).selectOption('施工前の書類');
-    assert.strictEqual(await page.locator('select').nth(2).inputValue(), '橋梁');
+    await openStage(page, '施工前の書類');
+    assert.strictEqual(await page.locator('select').nth(1).inputValue(), '橋梁');
     await page.getByText('対象は、案件名から「橋梁」と判断して選びました').waitFor();
     assert.strictEqual(await page.getByText('仕様書（橋梁）', { exact: true }).count(), 1);
     assert.strictEqual(await page.getByText('仕様書（一般道路）', { exact: true }).count(), 0);
-    await page.locator('select').nth(2).selectOption('一般道路');   // 手で変えられる
+    await page.locator('select').nth(1).selectOption('一般道路');   // 手で変えられる
     assert.strictEqual(await page.getByText('仕様書（橋梁）', { exact: true }).count(), 0);
     assert.strictEqual(await page.getByText('仕様書（一般道路）', { exact: true }).count(), 1);
     assert.deepStrictEqual(errors, []);
@@ -337,12 +341,12 @@ test('画面：直したファイルを、次の版として登録できる', { 
     const { page, errors } = await openPage(browser, url, '/__page');
     await page.locator('[data-doc-hub]').click();
     await page.getByText('工程別の書類：').waitFor();
-    await page.locator('select').nth(0).selectOption('打合せ・見積・提案');
+    await openStage(page, '打合せ・見積・提案');
     await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: '作成して保存' }).click()]);
     await page.getByText(/_v1\.docx/).waitFor();
     await page.reload(); await page.evaluate((r) => window.__fire(r), RECORD);
     await page.locator('[data-doc-hub]').click();
-    await page.locator('select').nth(0).selectOption('打合せ・見積・提案');
+    await openStage(page, '打合せ・見積・提案');
     await page.getByText('最新 v1').waitFor();
     await page.locator('input[data-revision="打合せ議事次第"]').setInputFiles({ name: '直した議事次第.docx', mimeType: 'application/octet-stream', buffer: tpl.docx });
     await page.getByText(/v2 として登録しました：東京Aビル 改修工事_打合せ議事次第_v2\.docx/).waitFor();
@@ -374,7 +378,7 @@ test('画面：直したファイルを登録すると、そのPDFも案件に�
     const open = async () => {
       await page.goto(url + '/__page'); await page.evaluate((r) => window.__fire(r), RECORD);
       await page.locator('[data-doc-hub]').click(); await page.getByText('工程別の書類：').waitFor();
-      await page.locator('select').nth(0).selectOption('打合せ・見積・提案');
+      await openStage(page, '打合せ・見積・提案');
     };
     await open();
     await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: '作成して保存' }).click()]);
@@ -411,7 +415,7 @@ test('画面：進捗から、いまの工程を決めて、書類関係に案�
     assert.match(await box.textContent(), /3\.見積り格納.*打合せ・見積・提案/);
     await page.locator('[data-doc-stage-open]').click();
     await page.getByText('工程別の書類：').waitFor();
-    assert.strictEqual(await page.locator('select').nth(0).inputValue(), '打合せ・見積・提案', '進捗の工程で、パネルが開く');
+    assert.strictEqual(await page.locator('details[data-stage][open]').getAttribute('data-stage'), '打合せ・見積・提案', '進捗の工程だけ、はじめから開く');
     assert.strictEqual(await page.locator('[data-doc-bills]').count(), 0, '請求の一覧は、既定では出ない（現場カルテで見る）。入れ物（案内）は、ある');
     // 受注のあとは、施工予定日・施工実施日・施工完了日で、工程を決める。失注は、案内なし
     const stageOf = async (extra) => { const q = await openPage(browser, url, '/__page', Object.assign({}, RECORD, extra)); await q.page.waitForTimeout(1500); const n = await q.page.locator('[data-doc-stage]').count(); return n ? await q.page.locator('[data-doc-stage]').textContent() : ''; };
@@ -475,8 +479,8 @@ test('画面：原価管理表は、請求くんの請求が原価明細に入�
     assert.match(bt, /税抜 ¥215,000/); await page.waitForFunction(() => /発注くんの注文（予算02が未承認のとき、予算原価に入る）　2件　税抜 ¥400,000/.test(document.querySelector('[data-doc-bills]').textContent) && /内定した見積（TS-B）（受注金額・受注原価に入る）　税抜 ¥2,000,000　原価 ¥1,500,000/.test(document.querySelector('[data-doc-bills]').textContent)); assert.match(bt, /A商事/); assert.match(bt, /B工業/); assert.ok(!/別案件の会社/.test(bt), '別の案件の請求は出ない');
     // 原価管理表を作る
     await page.locator('[data-doc-hub]').click(); await page.getByText('工程別の書類：').waitFor();
-    await page.locator('select').nth(0).selectOption('請求・原価管理');
-    await Promise.all([page.waitForEvent('download'), page.locator('div[style*="border-top"]', { hasText: '原価管理表' }).getByRole('button', { name: '作成して保存' }).click()]);
+    await openStage(page, '請求・原価管理');
+    await Promise.all([page.waitForEvent('download'), page.locator('div[data-doc-row]', { hasText: '原価管理表' }).getByRole('button', { name: '作成して保存' }).click()]);
     await page.getByText(/請求くんの請求を、原価明細に 3 行、入れました/).waitFor();
     await page.getByText(/予算02の承認済みの予算を、予算金額（税抜 ¥2,500,000）・予算原価（¥1,800,000）に入れました/).waitFor();
     await page.getByText(/見積くんの内定した見積（TS-B）を、受注金額（税抜 ¥2,000,000）・受注原価（¥1,500,000）に入れました/).waitFor();
@@ -501,7 +505,7 @@ test('画面：案件くんの値が空のまま入る項目を、作成後に�
     const { page, errors } = await openPage(browser, url, '/__page', blank);
     await page.locator('[data-doc-hub]').click();
     await page.getByText('工程別の書類：').waitFor();
-    await page.locator('select').nth(0).selectOption('打合せ・見積・提案');
+    await openStage(page, '打合せ・見積・提案');
     await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: '作成して保存' }).click()]);
     await page.getByText(/案件くんの値が空のまま入った項目.*\{\{現場住所\}\}/).waitFor();
     await page.getByText('保存はできています').waitFor();
@@ -523,8 +527,8 @@ test('画面：議事録（{{打合せ日}} {{議事録メモ}} のある雛形�
     const { page, errors } = await openPage(browser, url, '/__page');
     await page.locator('[data-doc-hub]').click();
     await page.getByText('工程別の書類：').waitFor();
-    await page.locator('select').nth(0).selectOption('打合せ・見積・提案');
-    await page.locator('div[style*="border-top"]', { hasText: '議事録' }).getByRole('button', { name: '作成して保存' }).click();
+    await openStage(page, '打合せ・見積・提案');
+    await page.locator('div[data-doc-row]', { hasText: '議事録' }).getByRole('button', { name: '作成して保存' }).click();
     // 入力欄：{{ }} にある項目（打合せ日・場所・議事録メモ）だけ出る
     await page.locator('[data-ask="議事録メモ"]').waitFor();
     assert.strictEqual(await page.locator('[data-ask="出席者"]').count(), 0, '雛形にない項目の欄は出ない');
@@ -618,8 +622,8 @@ test('画面：議事録の全項目（作成者の初期値・出席者は空�
     const { page, errors } = await openPage(browser, url, '/__page');
     await page.locator('[data-doc-hub]').click();
     await page.getByText('工程別の書類：').waitFor();
-    await page.locator('select').nth(0).selectOption('打合せ・見積・提案');
-    await page.locator('div[style*="border-top"]', { hasText: '議事録' }).getByRole('button', { name: '作成して保存' }).click();
+    await openStage(page, '打合せ・見積・提案');
+    await page.locator('div[data-doc-row]', { hasText: '議事録' }).getByRole('button', { name: '作成して保存' }).click();
     await page.locator('[data-ask="ToDo"]').waitFor();
     assert.strictEqual(await page.locator('[data-ask="作成者"]').inputValue(), 'くに', '作成者の初期値（開いた人の名前が取れないときは「くに」）');
     await page.locator('[data-ask="議題"]').fill('- 工程の確認\n- 見積の再提出');
@@ -646,14 +650,14 @@ test('画面：書類関係の承認（承認者と日時が残る）。新し�
     const dialogs = []; page.on('dialog', (d) => dialogs.push(d.message()));
     await page.locator('[data-doc-hub]').click();
     await page.getByText('工程別の書類：').waitFor();
-    await page.locator('select').nth(0).selectOption('打合せ・見積・提案');
+    await openStage(page, '打合せ・見積・提案');
     await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: '作成して保存' }).click()]);
     await page.getByText(/_v1\.docx/).waitFor();
     await page.reload(); await page.evaluate((r) => window.__fire(r), RECORD);
     await page.locator('[data-doc-hub]').click();
-    await page.locator('select').nth(0).selectOption('打合せ・見積・提案');
+    await openStage(page, '打合せ・見積・提案');
     await page.getByText('未承認').waitFor();
-    await page.locator('div[style*="border-top"]', { hasText: '打合せ議事次第' }).getByRole('button', { name: '承認', exact: true }).click();
+    await page.locator('div[data-doc-row]', { hasText: '打合せ議事次第' }).getByRole('button', { name: '承認', exact: true }).click();
     await page.getByText(/1件を承認しました/).waitFor();
     assert.ok(dialogs.some((m) => /承認します/.test(m) && /置き換えられていない|チェックの指摘/.test(m)), '承認の前に、チェックの結果を見せる：' + dialogs.join('|'));
     const row = mock.state.records['575'][0]['書類保管'].value[0].value;
@@ -691,7 +695,7 @@ test('画面：PDF化は、承認済みの書類だけ。サーバー未設定�
     const open = async () => {
       await page.goto(url + '/__page'); await page.evaluate((r) => window.__fire(r), RECORD);
       await page.locator('[data-doc-hub]').click(); await page.getByText('工程別の書類：').waitFor();
-      await page.locator('select').nth(0).selectOption('打合せ・見積・提案');
+      await openStage(page, '打合せ・見積・提案');
     };
     await open();
     await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: '作成して保存' }).click()]);
@@ -699,7 +703,7 @@ test('画面：PDF化は、承認済みの書類だけ。サーバー未設定�
     await open();
     // 未承認の書類には、PDF化がない
     assert.strictEqual(await page.getByRole('button', { name: /PDF化/ }).count(), 0, '承認前は、PDF化を出さない');
-    await page.locator('div[style*="border-top"]', { hasText: '打合せ議事次第' }).getByRole('button', { name: '承認', exact: true }).click();
+    await page.locator('div[data-doc-row]', { hasText: '打合せ議事次第' }).getByRole('button', { name: '承認', exact: true }).click();
     await page.getByText(/1件を承認しました/).waitFor();
     // サーバー未設定：押せない
     assert.strictEqual(await page.getByRole('button', { name: 'PDF化（サーバー未設定）' }).isDisabled(), true);
@@ -870,8 +874,8 @@ test('画面：議事録に、音声の文字起こしを貼り付けると、�
     const open = async () => {
       await page.goto(url + '/__page'); await page.evaluate((r) => window.__fire(r), RECORD);
       await page.locator('[data-doc-hub]').click(); await page.getByText('工程別の書類：').waitFor();
-      await page.locator('select').nth(0).selectOption('打合せ・見積・提案');
-      await page.locator('div[style*="border-top"]', { hasText: '議事録' }).getByRole('button', { name: '作成して保存' }).click();
+      await openStage(page, '打合せ・見積・提案');
+      await page.locator('div[data-doc-row]', { hasText: '議事録' }).getByRole('button', { name: '作成して保存' }).click();
       await page.locator('[data-minutes-src]').waitFor();
     };
     await open();
@@ -938,8 +942,8 @@ test('画面：サーバーにAIの鍵が無いあいだは、サーバーのURL
     const open = async () => {
       await page.goto(url + '/__page'); await page.evaluate((r) => window.__fire(r), RECORD);
       await page.locator('[data-doc-hub]').click(); await page.getByText('工程別の書類：').waitFor();
-      await page.locator('select').nth(0).selectOption('打合せ・見積・提案');
-      await page.locator('div[style*="border-top"]', { hasText: '議事録' }).getByRole('button', { name: '作成して保存' }).click();
+      await openStage(page, '打合せ・見積・提案');
+      await page.locator('div[data-doc-row]', { hasText: '議事録' }).getByRole('button', { name: '作成して保存' }).click();
       await page.locator('[data-minutes-src]').waitFor();
     };
     withAI = true; mock.state.aiReady = false;
@@ -967,8 +971,8 @@ test('画面：議事録（{{議事録本文}}）は、ひとつの四角に、�
     mock.addRecord('10', { 書類名: { value: '議事録まとめ' }, 工程: { value: '打合せ・見積・提案' }, 表示順: { value: '205' }, 説明: { value: '' }, 見られる立場: { value: ['営業'] }, 使用状況: { value: '使用中' }, 雛形: { value: [{ fileKey: k, name: 'matome.docx' }] } });
     const { page, errors } = await openPage(browser, url, '/__page');
     await page.locator('[data-doc-hub]').click(); await page.getByText('工程別の書類：').waitFor();
-    await page.locator('select').nth(0).selectOption('打合せ・見積・提案');
-    await page.locator('div[style*="border-top"]', { hasText: '議事録まとめ' }).getByRole('button', { name: '作成して保存' }).click();
+    await openStage(page, '打合せ・見積・提案');
+    await page.locator('div[data-doc-row]', { hasText: '議事録まとめ' }).getByRole('button', { name: '作成して保存' }).click();
     await page.locator('[data-ask="議事録本文"]').waitFor();
     assert.strictEqual(await page.locator('[data-ask]').count(), 1, '入力欄は、ひとつの四角だけ');
     await page.locator('[data-minutes-src]').fill('【出席者】太田、國井\n【議題】\n・夜間規制\n【決定事項】\n・規制は9時から17時\n【ToDo】\n・10/25まで 太田 見積を出す');
@@ -1011,8 +1015,8 @@ test('画面：議事録は、保存と同時に、PDFも、案件に自動で�
     const create = async () => {
       await page.goto(url + '/__page'); await page.evaluate((r) => window.__fire(r), RECORD);
       await page.locator('[data-doc-hub]').click(); await page.getByText('工程別の書類：').waitFor();
-      await page.locator('select').nth(0).selectOption('打合せ・見積・提案');
-      await page.locator('div[style*="border-top"]', { hasText: '議事録まとめ' }).getByRole('button', { name: '作成して保存' }).click();
+      await openStage(page, '打合せ・見積・提案');
+      await page.locator('div[data-doc-row]', { hasText: '議事録まとめ' }).getByRole('button', { name: '作成して保存' }).click();
       await page.locator('[data-ask="議事録本文"]').fill('【出席者】\n太田\n\n【場所】\n現場');
       await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: '作成して保存' }).last().click()]);
     };
@@ -1059,8 +1063,8 @@ test('画面：議事録の自動PDFを止めたとき（AUTO_PDF_MINUTES=false�
     const create = async () => {
       await page.goto(url + '/__page'); await page.evaluate((r) => window.__fire(r), RECORD);
       await page.locator('[data-doc-hub]').click(); await page.getByText('工程別の書類：').waitFor();
-      await page.locator('select').nth(0).selectOption('打合せ・見積・提案');
-      await page.locator('div[style*="border-top"]', { hasText: '議事録まとめ' }).getByRole('button', { name: '作成して保存' }).click();
+      await openStage(page, '打合せ・見積・提案');
+      await page.locator('div[data-doc-row]', { hasText: '議事録まとめ' }).getByRole('button', { name: '作成して保存' }).click();
       await page.locator('[data-ask="議事録本文"]').fill('【出席者】\n太田\n\n【場所】\n現場');
       await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: '作成して保存' }).last().click()]);
     };
@@ -1073,7 +1077,7 @@ test('画面：議事録の自動PDFを止めたとき（AUTO_PDF_MINUTES=false�
     const reopen = async () => {
       await page.goto(url + '/__page'); await page.evaluate((r) => window.__fire(r), RECORD);
       await page.locator('[data-doc-hub]').click(); await page.getByText('工程別の書類：').waitFor();
-      await page.locator('select').nth(0).selectOption('打合せ・見積・提案');
+      await openStage(page, '打合せ・見積・提案');
     };
     await reopen();
     const [dl] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'PDFにして保存' }).click()]);
@@ -1109,8 +1113,8 @@ test('画面：仕分け画面（1行ずつ、項目を選び直す・消す→�
     mock.addRecord('10', { 書類名: { value: '議事録まとめ' }, 工程: { value: '打合せ・見積・提案' }, 表示順: { value: '205' }, 説明: { value: '' }, 見られる立場: { value: ['営業'] }, 使用状況: { value: '使用中' }, 雛形: { value: [{ fileKey: k, name: 'matome.docx' }] } });
     const { page, errors } = await openPage(browser, url, '/__page');
     await page.locator('[data-doc-hub]').click(); await page.getByText('工程別の書類：').waitFor();
-    await page.locator('select').nth(0).selectOption('打合せ・見積・提案');
-    await page.locator('div[style*="border-top"]', { hasText: '議事録まとめ' }).getByRole('button', { name: '作成して保存' }).click();
+    await openStage(page, '打合せ・見積・提案');
+    await page.locator('div[data-doc-row]', { hasText: '議事録まとめ' }).getByRole('button', { name: '作成して保存' }).click();
     await page.locator('[data-ask="議事録本文"]').waitFor();
     assert.strictEqual(await page.locator('[data-ask]').count(), 1, '入力欄は、ひとつの四角だけ');
     await page.locator('[data-minutes-src]').fill('出席者は、太田さんと國井さんです。\n議題は、夜間規制の時間です。\n決まったことは、規制は9時から17時です。\n10月25日までに太田さんが見積書を出します。\n次回は、11月1日です。');
@@ -1175,7 +1179,7 @@ test('画面：作る前に、案件の情報が入らない場所を、赤い�
     const rec = Object.assign({}, RECORD, { c_addr: { type: 'SINGLE_LINE_TEXT', value: '' } });   // 現場住所が空
     const { page, errors } = await openPage(browser, url, '/__page', rec, { manualMissing: true });
     await page.locator('[data-doc-hub]').click(); await page.getByText('工程別の書類：').waitFor();
-    await page.locator('select').nth(0).selectOption('打合せ・見積・提案');
+    await openStage(page, '打合せ・見積・提案');
     await page.getByRole('button', { name: '作成して保存' }).click();
     const box = page.locator('[data-missing]'); await box.waitFor();
     assert.match(await box.textContent(), /案件の情報が、反映されていない場所があります/);
