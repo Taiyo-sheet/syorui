@@ -1364,7 +1364,7 @@
               var stay = !!((r.unknown && r.unknown.length) || (r.empty && r.empty.length) || r.billNote || chkNote);
               var base = (isMobile ? '保存しました：' : '保存してダウンロードしました：') + r.filename + (r.pdfOk ? '\nPDFも保存しました' : '') + unknownNote(r.unknown, r.empty) + (r.billNote ? '\n' + r.billNote : '') + chkNote;
               if (r.pdfErr) base += '\n（PDFは、保存できませんでした：' + r.pdfErr + '。書類は、保存できています。承認のあと、「PDF化」で作れます）';
-              else if (!r.pdfOk && ctx.caps && ctx.caps.pdf && PDF_SERVER_URL) base += '\n（「PDF化」を押すと、PDFも保存できます）';
+              else if (!r.pdfOk && ctx.caps && ctx.caps.pdf && PDF_SERVER_URL) base += asks.some(function (a) { return a.key === '議事録本文' || a.key === '議事録メモ'; }) ? '\n（「PDFにして保存」を押すと、PDFも保存できます）' : '\n（承認のあと、「PDF化」を押すと、PDFも保存できます）';
               reloadSoon(base, stay || !!r.pdfErr);
             })
               .catch(function (e) { btn.disabled = false; setMsg((e && e.message) || '作成できませんでした', true); });
