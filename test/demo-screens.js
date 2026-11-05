@@ -132,7 +132,7 @@ const PAGE = (type) => `
   const open = async (page, stage) => {
     await page.locator('[data-doc-hub]').click();
     await page.getByText('工程別の書類：').waitFor();
-    await page.locator('select').nth(0).selectOption(stage);
+    const d = page.locator('details[data-stage="' + stage + '"]'); if ((await d.getAttribute('open')) === null) await d.locator('summary').click();
     await page.waitForFunction(() => !/確認中/.test(document.body.innerText));
   };
   await shot('橋梁', '2_橋梁の案件_施工前の書類.png', (page) => open(page, '施工前の書類'));
