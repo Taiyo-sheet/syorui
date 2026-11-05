@@ -591,9 +591,12 @@
           });
           if (b02 && b02.total) { setCell(GENKA.budgetAmount, 'n', b02.total); setCell(GENKA.budget, 'n', b02.cost); }   // 予算（予算02の承認済み）：予算金額・予算原価
           else if (budget && budget.count) setCell(GENKA.budget, 'n', budget.total);   // 予算02がまだなければ、予算原価は、発注くんの注文の合計
-          if (won && won.total) {   // 受注（見積くんの内定した見積）。粗利は、予算と同じ形の計算式
-            setCell(GENKA.wonAmount, 'n', won.total); setCell(GENKA.wonCost, 'n', won.cost);
-            setCell(GENKA.wonProfit, 'f', GENKA.wonAmount + '-' + GENKA.wonCost); setCell(GENKA.wonRate, 'f', 'IF(' + GENKA.wonAmount + '=0,0,' + GENKA.wonProfit + '/' + GENKA.wonAmount + ')');
+          if (won && won.total) {   // 受注（見積くんの内定した見積）。粗利は、予算と同じ形の計算式。受注原価が、ないとき（現場カルテ）は、受注金額だけ
+            setCell(GENKA.wonAmount, 'n', won.total);
+            if (won.cost !== null && won.cost !== undefined) {
+              setCell(GENKA.wonCost, 'n', won.cost);
+              setCell(GENKA.wonProfit, 'f', GENKA.wonAmount + '-' + GENKA.wonCost); setCell(GENKA.wonRate, 'f', 'IF(' + GENKA.wonAmount + '=0,0,' + GENKA.wonProfit + '/' + GENKA.wonAmount + ')');
+            }
           }
           zip.file(path, xml);
           return zip.generateAsync({ type: 'arraybuffer' }).then(function (data) { return { data: data, count: used.length, over: rows.length - used.length, skipped: skipped, isGenka: true }; });
