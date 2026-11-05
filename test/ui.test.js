@@ -259,7 +259,7 @@ test('画面：対象（橋梁／一般道路）で、仕様書を出し分け�
     assert.strictEqual(await page.getByText('仕様書（橋梁）', { exact: true }).count(), 1);
     assert.strictEqual(await page.getByText('仕様書（一般道路）', { exact: true }).count(), 0);
     assert.strictEqual(await page.getByText('作業手順書').count() >= 1, true);
-    await page.waitForFunction(() => /施工前の書類（作成済 0\/2）/.test(document.querySelectorAll('select')[0].textContent));
+    await page.waitForFunction(() => /施工前の書類（作成済 0\/2）/.test(document.querySelector('details[data-stage]').parentNode.textContent));
     // 一般道路を選ぶ → 一般道路用と共通だけ
     await page.locator('select').nth(1).selectOption('一般道路');
     assert.strictEqual(await page.getByText('仕様書（橋梁）', { exact: true }).count(), 0);
@@ -282,7 +282,7 @@ test('画面：「共通」しかなければ、対象の選択は出ない', { 
     const { page } = await openPage(browser, url, '/__page');
     await page.locator('[data-doc-hub]').click();
     await page.getByText('工程別の書類：').waitFor();
-    assert.strictEqual(await page.locator('select').count(), 2, '工程・立場のみ');
+    assert.strictEqual(await page.locator('select').count(), 1, '立場のみ（工程は、選ばずに、上から順に開く）');
   } finally { await browser.close(); await mock.close(); }
 });
 
@@ -381,7 +381,7 @@ test('画面：直したファイルを登録すると、そのPDFも案件に�
       await openStage(page, '打合せ・見積・提案');
     };
     await open();
-    await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: '作成して保存' }).click()]);
+    await Promise.all([page.waitForEvent('download'), page.locator('details[data-stage][open]').getByRole('button', { name: '作成して保存' }).click()]);
     await page.getByText(/_v1\.docx/).waitFor();
     await open(); await page.getByText('最新 v1').waitFor();
     await page.locator('input[data-revision="打合せ議事次第"]').setInputFiles({ name: '直した.docx', mimeType: 'application/octet-stream', buffer: tpl.docx });
@@ -702,7 +702,7 @@ test('画面：PDF化は、承認済みの書類だけ。サーバー未設定�
     await page.getByText(/_v1\.docx/).waitFor();
     await open();
     // 未承認の書類には、PDF化がない
-    assert.strictEqual(await page.getByRole('button', { name: /PDF化/ }).count(), 0, '承認前は、PDF化を出さない');
+    assert.strictEqual(await page.getByRole('button', { name: /PDF化/ }).count(), 1, '定型の書類（提案書などを除く）は、承認前でも、PDFのボタンが出る');
     await page.locator('div[data-doc-row]', { hasText: '打合せ議事次第' }).getByRole('button', { name: '承認', exact: true }).click();
     await page.getByText(/1件を承認しました/).waitFor();
     // サーバー未設定：押せない
