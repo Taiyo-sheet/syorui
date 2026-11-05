@@ -698,7 +698,7 @@ test('画面：PDF化は、承認済みの書類だけ。サーバー未設定�
       await openStage(page, '打合せ・見積・提案');
     };
     await open();
-    await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: '作成して保存' }).click()]);
+    await Promise.all([page.waitForEvent('download'), page.locator('details[data-stage][open]').getByRole('button', { name: '作成して保存' }).click()]);
     await page.getByText(/_v1\.docx/).waitFor();
     await open();
     // 未承認の書類には、PDF化がない
