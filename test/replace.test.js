@@ -316,7 +316,7 @@ test('原価管理表：発注くんの注文（業者へ送付済・完了）�
 });
 
 test('原価管理表：見積くんの内定した見積が、受注金額・受注原価に入る（粗利は計算式）。内定がなければ空', async () => {
-  const es = (id, st, total, cost, no) => ({ $id: { value: String(id) }, 'ステータス': { value: st }, '税抜合計': { value: String(total) }, '原価合計': { value: String(cost) }, '見積No': { value: no } });
+  const es = (id, st, total, cost, no) => ({ $id: { value: String(id) }, 'ステータス': { value: st }, '改めて計': { value: String(total) }, '税抜合計': { value: String(total + 87066) }, '原価合計': { value: String(cost) }, '見積No': { value: no } });
   assert.strictEqual(lib.wonEstimateOf([es(1, '見積作成中', 100, 50, 'A'), es(2, '部長承認完了', 200, 90, 'B')]), null, '内定の前は、受注として入れない');
   const w = lib.wonEstimateOf([es(3, '内定', 1000000, 700000, 'TS-1'), es(5, '予算02作成案内', 1200000, 800000, 'TS-2'), es(4, '見積作成中', 1, 1, 'X')]);
   assert.deepStrictEqual(w, { total: 1200000, cost: 800000, no: 'TS-2', count: 2 }, '内定以降のうち、レコード番号が新しいもの');

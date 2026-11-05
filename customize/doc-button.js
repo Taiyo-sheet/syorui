@@ -506,8 +506,8 @@
   var BILL = { app: 829, anken: 'anken', date: 'billing_date', vendor: 'vendor_name', kubun: 'kubun', table: 'details', item: 'item_name', amount: 'bill_amount', status: 'ステータス', subtotal: 'subtotal' };
   // 発注くん(824)の注文：この案件の、発注した（業者へ送付済・完了）注文の、税抜の合計を、予算原価に入れる
   var ORDER = { app: 824, anken: 'anken', total: 'subtotal', status: 'ステータス', fixed: ['業者へ送付済', '完了'] };
-  // 見積くん(608)：この案件の、内定した（受注した）見積の、税抜合計を受注金額に、原価合計を受注原価に入れる（内定が複数あれば、レコード番号が新しいもの）
-  var ESTIMATE = { app: 608, anken: 'anken', total: '税抜合計', cost: '原価合計', status: 'ステータス', no: '見積No', won: ['内定', '予算02作成案内'] };
+  // 見積くん(608)：この案件の、内定した（受注した）見積の、「改めて計」（税抜合計−端数調整＝切り捨て後の税抜）を受注金額に、原価合計を受注原価に入れる（内定が複数あれば、レコード番号が新しいもの）
+  var ESTIMATE = { app: 608, anken: 'anken', total: '改めて計', totalBefore: '税抜合計', cost: '原価合計', status: 'ステータス', no: '見積No', won: ['内定', '予算02作成案内'] };
   // 予算02(735)：この案件の、承認済み（部長承認完了）の予算の、契約金額（税抜）を予算金額に、総原価を予算原価に入れる（複数あれば、レコード番号が新しいもの）。まだなければ、予算原価は、発注くんの注文の合計
   var BUDGET = { app: 735, anken: 'anken', total: '契約金額_税抜合計', cost: '総原価合計02', status: 'ステータス', fixed: ['部長承認完了'] };
   var GENKA = { sheet: '原価管理', firstRow: 24, lastRow: 173, date: 'B', vendor: 'F', item: 'R',
@@ -558,7 +558,8 @@
     if (!won.length) return null;
     won.sort(function (a, b) { return Number(b.$id && b.$id.value || 0) - Number(a.$id && a.$id.value || 0); });
     var r = won[0];
-    return { total: Number((r[ESTIMATE.total] && r[ESTIMATE.total].value) || 0), cost: Number((r[ESTIMATE.cost] && r[ESTIMATE.cost].value) || 0), no: (r[ESTIMATE.no] && r[ESTIMATE.no].value) || '', count: won.length };
+    var fin = Number((r[ESTIMATE.total] && r[ESTIMATE.total].value) || 0) || Number((r[ESTIMATE.totalBefore] && r[ESTIMATE.totalBefore].value) || 0);   // 改めて計（端数調整のあと）。なければ、税抜合計
+    return { total: fin, cost: Number((r[ESTIMATE.cost] && r[ESTIMATE.cost].value) || 0), no: (r[ESTIMATE.no] && r[ESTIMATE.no].value) || '', count: won.length };
   }
   // 原価管理表（Excel）の「原価明細」に、行を入れる。金額・日付は、数字のまま入れる（合計や月ごとの集計の計算式が、動くように）
   function genkaFill(JSZipLib, buf, rows, budget, won, b02) {

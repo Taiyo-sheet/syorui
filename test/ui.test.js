@@ -453,7 +453,7 @@ test('画面：原価管理表は、請求くんの請求が原価明細に入�
     bud('2026', '予算02作成中', 1, 1); bud('2026', '部長承認完了', 2500000, 1800000); bud('9999', '部長承認完了', 88888888, 1);
     // 見積くん(608)：この案件の見積（作成中1件・内定1件）と、別の案件の内定
     mock.addApp('608', '見積くん');
-    const est = (anken, st, total, cost, no) => mock.addRecord('608', { anken: { value: anken }, 'ステータス': { value: st }, '税抜合計': { value: String(total) }, '原価合計': { value: String(cost) }, '見積No': { value: no } });
+    const est = (anken, st, total, cost, no) => mock.addRecord('608', { anken: { value: anken }, 'ステータス': { value: st }, '改めて計': { value: String(total) }, '税抜合計': { value: String(total + 87066) }, '原価合計': { value: String(cost) }, '見積No': { value: no } });
     est('2026', '見積作成中', 111, 11, 'TS-A'); est('2026', '内定', 2000000, 1500000, 'TS-B'); est('9999', '内定', 99999999, 1, 'TS-Z');
     // 原価管理表の雛形（「原価管理」シートのあるExcel）
     const z = new JSZip();
