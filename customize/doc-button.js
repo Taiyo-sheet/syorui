@@ -34,6 +34,7 @@
   var AUTO_PDF_ALL = true;   // true：どの書類も、作ると同時に、PDFも自動で案件に保存する（利用者の希望 2026-11-05。承認は、待たない）。止めたいときは false
   var NO_PDF_DOCS = ['提案書', '竣工図書', '見積'];   // 図面などを読み込ませて、内容を作り込む書類（名前にこの文字を含む）：作ったときに、PDFは自動で作らず、「PDF」のボタンも出さない。直したファイルを登録したときは、PDFも保存する（利用者の希望 2026-11-05）
   function pdfEligible(name) { return !NO_PDF_DOCS.some(function (w) { return String(name).indexOf(w) >= 0; }); }
+  var UI_FONT = '"Hiragino Kaku Gothic ProN","Hiragino Sans","Yu Gothic UI","Yu Gothic",Meiryo,"Noto Sans JP",sans-serif';
   var BTN_MAIN = 'background:#1F3864;color:#fff;border:0;border-radius:6px;', BTN_SUB = 'background:#fff;color:#1F3864;border:1px solid #1F3864;border-radius:6px;';   // ボタンの見た目（案件管理アプリのボタンと同じ紺）
   var AUTO_PDF_MINUTES = true;   // true：議事録は、保存と同時に、PDFも自動で保存する（利用者の希望。止めたいときは false にする。どちらでも、保存したあとに「PDFにして保存」を押せる）
   var ACTIVE = '使用中';
@@ -1035,7 +1036,7 @@
     return e;
   }
   function makeSelect(options, labelAll) {
-    var s = el('select', 'font-size:14px;padding:6px;margin:0 8px 8px 0;max-width:100%');
+    var s = el('select', 'font-size:13px;padding:6px 12px;margin:0 8px 10px 0;max-width:100%;border:1px solid #c5cfdf;border-radius:16px;background:#fff;color:#1F3864;font-family:inherit');
     if (labelAll) { var o0 = document.createElement('option'); o0.value = ''; o0.textContent = labelAll; s.appendChild(o0); }
     options.forEach(function (v) { var o = document.createElement('option'); o.value = v; o.textContent = v; s.appendChild(o); });
     return s;
@@ -1054,11 +1055,11 @@
   }
 
   function openPanel(ctx) {
-    var overlay = el('div', 'position:fixed;left:0;top:0;right:0;bottom:0;background:rgba(0,0,0,.45);z-index:10000;overflow:auto;-webkit-overflow-scrolling:touch');
-    var box = el('div', 'background:#fff;max-width:720px;margin:24px auto;border-radius:8px;padding:16px;font-size:14px;box-sizing:border-box;width:calc(100% - 24px)');
+    var overlay = el('div', 'position:fixed;left:0;top:0;right:0;bottom:0;background:rgba(15,25,45,.55);z-index:10000;overflow:auto;-webkit-overflow-scrolling:touch');
+    var box = el('div', 'background:#f3f5f9;max-width:760px;margin:24px auto;border-radius:14px;padding:18px;font-size:14px;box-sizing:border-box;width:calc(100% - 24px);font-family:' + UI_FONT + ';color:#222;line-height:1.5;box-shadow:0 8px 30px rgba(0,0,0,.3)');
     var head = el('div', 'display:flex;justify-content:space-between;align-items:center;margin-bottom:10px');
-    head.appendChild(el('div', 'font-weight:bold;font-size:17px', '工程別の書類：' + ctx.projectName));
-    var close = el('button', 'padding:6px 12px;font-size:14px;cursor:pointer;white-space:nowrap;flex:none;margin-left:10px', '閉じる'); close.type = 'button';
+    head.appendChild(el('div', 'font-weight:bold;font-size:18px;color:#1F3864;letter-spacing:.02em', '工程別の書類：' + ctx.projectName));
+    var close = el('button', 'padding:6px 14px;font-size:13px;cursor:pointer;white-space:nowrap;flex:none;margin-left:10px;border-radius:16px;font-family:inherit;' + BTN_SUB, '閉じる'); close.type = 'button';
     close.addEventListener('click', function () { document.body.removeChild(overlay); });
     head.appendChild(close);
     box.appendChild(head);
@@ -1091,10 +1092,10 @@
       else if (targets.indexOf(ctx.guessedTarget) >= 0) { tgtSel.value = ctx.guessedTarget; autoNote = '対象は、案件名から「' + ctx.guessedTarget + '」と判断して選びました。違うときは選び直してください。'; }
       var bar = el('div'); if (auds.length) bar.appendChild(audSel); if (targets.length) bar.appendChild(tgtSel);
       var batch = { disabled: false };   // （各工程の見出しの下にある「この工程をまとめて作成」の状態の受け皿）
-      var batchAll = el('button', 'padding:6px 12px;font-size:13px;cursor:pointer;margin-bottom:8px;margin-left:8px', '全工程をまとめて作成'); batchAll.type = 'button';
+      var batchAll = el('button', 'padding:6px 14px;font-size:13px;cursor:pointer;margin-bottom:10px;margin-left:4px;border-radius:16px;font-family:inherit;' + BTN_SUB, '全工程をまとめて作成'); batchAll.type = 'button';
       bar.appendChild(batchAll);
       if (ctx.caps && ctx.caps.approval) {
-        var approveAll = el('button', 'padding:6px 12px;font-size:13px;cursor:pointer;margin-bottom:8px;margin-left:8px;font-weight:bold', '書類一式を承認'); approveAll.type = 'button';
+        var approveAll = el('button', 'padding:6px 14px;font-size:13px;cursor:pointer;margin-bottom:10px;margin-left:8px;font-weight:bold;border-radius:16px;font-family:inherit;' + BTN_SUB, '書類一式を承認'); approveAll.type = 'button';
         approveAll.addEventListener('click', function () {
           var names = Object.keys(existing).filter(function (n) { return !existing[n].approved; });
           approveNames(names, '未承認の書類');
@@ -1320,26 +1321,26 @@
       function makeRow(rec) {
         var name = fieldText(rec[MF.name]), ex = existing[name];
         var ok = hasTemplate(rec), kind = kindOf(rec);
-        var row = el('div', 'display:flex;gap:10px;align-items:center;justify-content:space-between;padding:8px 10px;border:1px solid #d5dce6;border-radius:8px;margin:6px 0;flex-wrap:wrap'); row.setAttribute('data-doc-row', '1');
+        var row = el('div', 'display:flex;gap:10px;align-items:center;justify-content:space-between;padding:10px 12px;border:1px solid #e1e6ee;border-radius:10px;margin:8px 0;background:#fcfdff;flex-wrap:wrap'); row.setAttribute('data-doc-row', '1');
         var left = el('div', 'flex:1 1 200px');
-        left.appendChild(el('div', 'font-weight:bold', name));
+        left.appendChild(el('div', 'font-weight:bold;font-size:14px;color:#14233f', name));
         left.appendChild(el('div', 'font-size:12px;color:#666', (targetOf(rec) ? '【' + targetOf(rec) + '用】' : '') + fieldText(rec[MF.desc])));
-        var state = el('div', 'font-size:12px;color:#1f4e79');
+        var state = el('div', 'font-size:12px;color:#1f4e79;margin-top:3px');
         if (ok && kind === 'plain') state.textContent = '雛形のまま使う書類（案件の情報は入れません）';
         else if (ex) {
           state.appendChild(document.createTextNode('最新 v' + ex.version + ' ・ '));
-          var a = el('a', 'cursor:pointer;display:inline-block;padding:2px 10px;font-size:12px;' + BTN_SUB, '開く'); a.setAttribute('role', 'link');
+          var a = el('a', 'cursor:pointer;display:inline-block;padding:2px 12px;font-size:12px;border-radius:16px;' + BTN_SUB, '開く'); a.setAttribute('role', 'link');
           a.addEventListener('click', function () { openStored(existing[name]).catch(function (e) { setMsg((e && e.message) || '開けませんでした', true); }); });
           state.appendChild(a);
           if (ctx.caps && ctx.caps.approval) {
             state.appendChild(document.createTextNode(' ・ '));
-            var ap = el('span', ex.approved ? 'color:#1f7a3d;font-weight:bold' : 'color:#a05a00', ex.approved ? '承認済み（' + ex.approver + '・' + String(ex.approvedAt).slice(0, 10) + '）' : '未承認');
+            var ap = el('span', ex.approved ? 'color:#1f7a3d;font-weight:bold;background:#e1f3e7;border-radius:10px;padding:1px 9px' : 'color:#a05a00;background:#fff1d6;border-radius:10px;padding:1px 9px', ex.approved ? '承認済み（' + ex.approver + '・' + String(ex.approvedAt).slice(0, 10) + '）' : '未承認');
             state.appendChild(ap);
           }
-        } else state.textContent = '未作成';
+        } else { state.textContent = '未作成'; state.style.cssText += ';display:inline-block;background:#eceff4;color:#5b6677;border-radius:10px;padding:1px 9px'; }
         left.appendChild(state);
         var label = !ok ? '雛形が未登録' : !kind ? '確認中…' : kind === 'plain' ? '雛形を開く' : ex ? 'v' + (ex.version + 1) + ' を作成' : '作成して保存';
-        var btn = el('button', 'padding:8px 14px;font-size:14px;cursor:pointer;' + BTN_MAIN, label); btn.type = 'button';
+        var btn = el('button', 'padding:7px 16px;font-size:13px;font-weight:bold;cursor:pointer;border-radius:16px;font-family:inherit;' + BTN_MAIN, label); btn.type = 'button';
         btn.disabled = !ok || !kind;
         btn.addEventListener('click', function () {
           if (kind === 'plain') {
@@ -1371,12 +1372,12 @@
           });
           });
         });
-        var right = el('div', 'display:flex;flex-direction:column;gap:6px;align-items:stretch');
+        var right = el('div', 'display:flex;flex-wrap:wrap;gap:6px;align-items:center;justify-content:flex-end;max-width:100%');
         right.appendChild(btn);
         // 直したファイルを、次の版として登録する（作成済みの書類だけ）
         if (ex && ok && kind !== 'plain') {
           var pick = document.createElement('input'); pick.type = 'file'; pick.style.display = 'none'; pick.setAttribute('data-revision', name);
-          var rev = el('button', 'padding:6px 10px;font-size:12px;cursor:pointer;' + BTN_SUB, '直したファイルを登録'); rev.type = 'button';
+          var rev = el('button', 'padding:5px 12px;font-size:12px;cursor:pointer;border-radius:16px;font-family:inherit;' + BTN_SUB, '直したファイルを登録'); rev.type = 'button';
           rev.addEventListener('click', function () { pick.click(); });
           pick.addEventListener('change', function () {
             var f = pick.files && pick.files[0]; if (!f) return;
@@ -1395,7 +1396,7 @@
           right.appendChild(rev); right.appendChild(pick);
           // 書類関係の承認（承認した人と日時が、書類保管の行に残る。新しい版を作ると、承認は、外れる）
           if (ctx.caps && ctx.caps.approval && !ex.approved) {
-            var apb = el('button', 'padding:6px 10px;font-size:12px;cursor:pointer;font-weight:bold;' + BTN_SUB, '承認'); apb.type = 'button';
+            var apb = el('button', 'padding:5px 12px;font-size:12px;cursor:pointer;font-weight:bold;border-radius:16px;font-family:inherit;' + BTN_SUB, '承認'); apb.type = 'button';
             apb.addEventListener('click', function () { approveNames([name], '「' + name + '」v' + ex.version); });
             right.appendChild(apb);
           }
@@ -1403,11 +1404,11 @@
           var isMin = asksOf(rec).some(function (a) { return a.key === '議事録本文' || a.key === '議事録メモ'; });
           if (ctx.caps && ctx.caps.pdf && (ex.approved || isMin || pdfEligible(name))) {
             if (ex.pdf) {
-              var pdfOpen = el('button', 'padding:6px 10px;font-size:12px;cursor:pointer;' + BTN_SUB, 'PDFを開く'); pdfOpen.type = 'button';
+              var pdfOpen = el('button', 'padding:5px 12px;font-size:12px;cursor:pointer;border-radius:16px;font-family:inherit;' + BTN_SUB, 'PDFを開く'); pdfOpen.type = 'button';
               pdfOpen.addEventListener('click', function () { download(ex.pdf.fileKey).then(function (buf) { saveAs(buf, ex.pdf.name); }).catch(function (e) { setMsg((e && e.message) || '開けませんでした', true); }); });
               right.appendChild(pdfOpen);
             } else {
-              var pdfb = el('button', 'padding:6px 10px;font-size:12px;cursor:pointer;' + BTN_SUB, PDF_SERVER_URL ? (ex.approved ? 'PDF化' : 'PDFにして保存') : 'PDF化（サーバー未設定）'); pdfb.type = 'button'; pdfb.disabled = !PDF_SERVER_URL;
+              var pdfb = el('button', 'padding:5px 12px;font-size:12px;cursor:pointer;border-radius:16px;font-family:inherit;' + BTN_SUB, PDF_SERVER_URL ? (ex.approved ? 'PDF化' : 'PDFにして保存') : 'PDF化（サーバー未設定）'); pdfb.type = 'button'; pdfb.disabled = !PDF_SERVER_URL;
               pdfb.addEventListener('click', function () {
                 pdfb.disabled = true; setMsg('PDF化しています…', false);
                 convertToPdf(ctx, name, existing[name], !ex.approved).then(function (r) { existing[name].pdf = { fileKey: null, name: r.name }; saveAs(r.data, r.name); setMsg('PDFを保存しました：' + r.name + '（画面を開き直すと、「PDFを開く」になります）', false); })
@@ -1424,7 +1425,7 @@
         var sec = sections[st]; sec.body.innerHTML = '';
         var rows = stageRows(st);
         if (!rows.length) { sec.body.textContent = 'この条件の書類はありません。'; return; }
-        var bb = el('button', 'padding:6px 12px;font-size:13px;cursor:pointer;margin:4px 0 6px;' + BTN_SUB, 'この工程をまとめて作成'); bb.type = 'button'; bb.setAttribute('data-stage-batch', st);
+        var bb = el('button', 'padding:5px 14px;font-size:12px;cursor:pointer;margin:2px 0 6px;border-radius:16px;font-family:inherit;' + BTN_MAIN, 'この工程をまとめて作成'); bb.type = 'button'; bb.setAttribute('data-stage-batch', st);
         bb.addEventListener('click', function () { runBatch(bb, function () { return stageRows(st); }, false, 'この工程'); });
         sec.body.appendChild(bb);
         rows.forEach(function (rec) {
@@ -1437,10 +1438,10 @@
       function show() {
         list.innerHTML = ''; sections = {};
         stages.forEach(function (st) {
-          var det = el('details', 'border:1px solid #d5dce6;border-radius:8px;margin:0 0 8px;background:#fff');
+          var det = el('details', 'border:0;border-radius:12px;margin:0 0 10px;background:#fff;box-shadow:0 1px 4px rgba(20,40,80,.12);overflow:hidden');
           det.setAttribute('data-stage', st);
-          var sum = el('summary', 'cursor:pointer;font-weight:bold;font-size:14px;padding:10px 12px;color:#1F3864', stageLabel(st));
-          var body = el('div', 'padding:0 12px 8px');
+          var sum = el('summary', 'cursor:pointer;font-weight:bold;font-size:15px;padding:12px 14px;color:#1F3864;background:#eaf0fa', stageLabel(st));
+          var body = el('div', 'padding:8px 14px 10px');
           det.appendChild(sum); det.appendChild(body); list.appendChild(det);
           sections[st] = { det: det, sum: sum, body: body };
           if (openSet[st]) { det.open = true; fillSection(st); }
