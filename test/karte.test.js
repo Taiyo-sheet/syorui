@@ -48,8 +48,9 @@ test('現場カルテ：「原価管理表を作る」で、現場カルテの�
     await page.getByText(/ダウンロードしました.*請求履歴 2 行.*受注金額・予算を入れました/).waitFor();
     const path = await dl.path(); const xml = await (await JSZip.loadAsync(fs.readFileSync(path))).file('xl/worksheets/sheet1.xml').async('string');
     assert.match(xml, /<t[^>]*>のと里山海道 電気工事<\/t>/, '工事名');
-    assert.match(xml, /<c r="AG2" s="7"><v>16787066<\/v><\/c>/, '受注金額'); assert.ok(!/AG4[^>]*><f>/.test(xml), '受注原価がないので、受注粗利の計算式は入れない');
-    assert.match(xml, /<c r="AQ2" s="6"><v>11457400<\/v><\/c>/, '予算金額'); assert.match(xml, /<c r="AQ3" s="6"><v>7900000<\/v><\/c>/, '予算原価＝発注確定額');
+    assert.match(xml, /<c r="AG2" s="7"><v>16787066<\/v><\/c>/, '受注金額＝受注金額（売上）'); assert.match(xml, /<c r="AG3" s="7"><v>11457400<\/v><\/c>/, '受注原価＝予算（01・見積のときの原価）');
+    assert.match(xml, /<c r="AG4" s="7"><f>AG2-AG3<\/f><\/c>/, '受注粗利は、計算式（現場カルテの01利益率と同じ数字になる）');
+    assert.match(xml, /<c r="AQ2" s="6"><v>16787066<\/v><\/c>/, '予算金額＝受注金額（売上）'); assert.match(xml, /<c r="AQ3" s="6"><v>7900000<\/v><\/c>/, '予算原価＝発注確定額（現場カルテの02利益率と同じ数字になる）');
     assert.match(xml, /<c r="AV24" s="5"><v>143700<\/v><\/c>/); assert.match(xml, /<c r="AV25" s="5"><v>30000<\/v><\/c>/, '請求の明細が、1行ずつ');
     assert.ok(!/別案件|関係ない/.test(xml), '別の案件の請求は入らない'); assert.ok(!/\{\{/.test(xml), '{{ }} が残らない（対応する項目がないものは、空欄）');
     assert.strictEqual(JSON.stringify(mock.state.records), before, '何も書き込まない');

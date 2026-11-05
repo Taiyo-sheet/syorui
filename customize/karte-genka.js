@@ -2,7 +2,7 @@
    現場カルテ(826)に「原価管理表を作る」ボタンを出す（PC用）
    ・押すと、書類マスタの「原価管理表」の雛形（Excel）に、この案件の、現場カルテの数字と、請求履歴（請求くん）を入れて、ダウンロードする
    ・現場カルテや、ほかのアプリには、何も書き込まない（ファイルを作るだけ）
-   ・入る内容：工事名・工事コード・元請・施工開始/完了・受注金額・予算金額（予算01）・予算原価（発注確定額）・原価明細（請求くんの請求）
+   ・入る内容：工事名・工事コード・元請・施工開始/完了・受注金額・受注金額・受注原価（予算01）・予算金額（受注金額）・予算原価（発注確定額）・原価明細（請求くんの請求）
    ・同じ部品（doc-button.js の「Excelに入れる」部分）を、借りて使う（ボタンなどは、出さない）
    設置：JSZip → karte-genka.js → doc-button.js の順に、PC用JavaScriptへ登録
    ============================================================ */
@@ -46,10 +46,13 @@ window.__TS_DOC_ENGINE_ONLY = true;   // doc-button.js を、「部品を貸す�
       var buf = res[0], billRecs = res[1];
       return E.fillTemplate(JSZip, buf, 'xlsx', values).then(function (out) {
         var rows = billRecs ? E.billRowsOf(billRecs) : [];
-        var budget = { total: num(rec, F.budget), cost: num(rec, F.ordered) };
-        var won = { total: num(rec, F.sales), cost: null };   // 受注原価は、現場カルテに対応する項目がないため、空のまま
+        // 現場カルテの利益率と、同じ数字になる対応（利益率＝（受注金額−原価）÷受注金額。原価＝①予算(01)＝見積のときの原価／②発注確定額／③実際原価）
+        //   受注：受注金額、受注原価＝予算(01)　→ 01利益率    予算：予算金額＝受注金額、予算原価＝発注確定額　→ 02利益率・粗利（見込）
+        var sales = num(rec, F.sales);
+        var won = { total: sales, cost: num(rec, F.budget) };
+        var budget = { total: sales, cost: num(rec, F.ordered) };
         return E.genkaFill(JSZip, out.data, rows, null, won.total ? won : null, budget.total ? budget : null).then(function (r) {
-          return { data: r.data, count: r.count, billsOk: billRecs !== null, isGenka: r.isGenka, name: (val(rec, F.name) || '案件') + '_原価管理表.xlsx', sales: won.total, budget: budget };
+          return { data: r.data, count: r.count, billsOk: billRecs !== null, isGenka: r.isGenka, name: (val(rec, F.name) || '案件') + '_原価管理表.xlsx', sales: sales, budget: budget };
         });
       });
     });
