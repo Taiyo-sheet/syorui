@@ -40,6 +40,16 @@
   // 案件くんの「進捗」から、いまの工程（書類マスタの「工程」）を決める。「現在の工程」の項目があれば、そちらを優先する。足りない進捗は、ここに足す
   var PROGRESS_LABEL = '進捗';
   var PROGRESS_STAGE = [[/^0\./, '情報取得・現状確認'], [/^1\./, '情報取得・現状確認'], [/^2\./, '情報取得・現状確認'], [/^3\./, '打合せ・見積・提案']];
+  // 進捗が「4.受注」のあとは、施工予定日・施工実施日・施工完了日の入力で、工程を細かく決める（「5.失注」は、書類の案内なし）
+  function stageOfRecord(record) {
+    var p = String((record && record[PROGRESS_LABEL] && record[PROGRESS_LABEL].value) || '').trim();
+    if (/^5\./.test(p)) return '';
+    if (/^4\./.test(p)) {
+      var has = function (c) { return !!(record[c] && record[c].value); };
+      if (has('施工完了日')) return '竣工'; if (has('施工実施日')) return '施工・試験'; if (has('施工予定日_0')) return '施工前の書類'; return '受注・準備';
+    }
+    return stageOfProgress(p);
+  }
   function stageOfProgress(p) { p = String(p || '').trim(); for (var i = 0; i < PROGRESS_STAGE.length; i++) if (PROGRESS_STAGE[i][0].test(p)) return PROGRESS_STAGE[i][1]; return ''; }
   var STAGE_LABEL = '現在の工程';                      // 案件くんにこの項目があれば、その工程を最初に表示
 
@@ -1620,7 +1630,7 @@
     // 画面に足す部品は、1つの入れ物（wrap）にまとめる。タブ表示プラグインの行の数え方に、影響しないように、部品の数を、増やさない・場合によって変えない
     var wrap = el('div', '');
     wrap.setAttribute('data-doc-bills-wrap', '1');
-    var prog = (record[PROGRESS_LABEL] && record[PROGRESS_LABEL].value) || '', stage = stageOfProgress(prog);
+    var prog = (record[PROGRESS_LABEL] && record[PROGRESS_LABEL].value) || '', stage = stageOfRecord(record);
     if (stage) {
       var ban = el('div', 'margin:4px 0 8px;border:1px solid #f0d9a8;border-radius:6px;background:#fff8e6;padding:8px 10px;max-width:760px;font-size:13px;display:flex;gap:10px;align-items:center;flex-wrap:wrap');
       ban.setAttribute('data-doc-stage', '1');
@@ -1703,7 +1713,7 @@
         NAME_LABELS.some(function (l) { if (values[l]) { projectName = values[l]; return true; } return false; });
         openPanel({
           values: values, caps: caps, projectId: projectId, projectName: projectName || ('案件' + projectId),
-          currentStage: values[STAGE_LABEL] || stageOfProgress(values[PROGRESS_LABEL]), target: TARGET_LABEL ? values[TARGET_LABEL] || '' : '', guessedTarget: guessTarget(projectName)
+          currentStage: values[STAGE_LABEL] || stageOfRecord(record), target: TARGET_LABEL ? values[TARGET_LABEL] || '' : '', guessedTarget: guessTarget(projectName)
         });
       });
     });
