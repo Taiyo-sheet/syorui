@@ -631,13 +631,8 @@ test('画面：議事録の全項目（作成者の初期値・出席者は空�
     assert.match(text, /作成者：くに/); assert.match(text, /出席者：不明/); assert.match(text, /議題：・工程の確認\s+・見積の再提出/);
     assert.match(text, /決定：・来週着工/); assert.match(text, /ToDo：10\/25まで 太田 見積を出す/); assert.match(text, /次回：なし/);
     assert.match(text, /日時：\d{4}年\d{1,2}月\d{1,2}日/, '打合せ日の初期値は、今日');
-    // 「チェック」：置き換えできなかった {{存在しない場所}} を指摘する
-    await page.getByText(/置き換えできずに残った項目/).waitFor();
-    await page.getByRole('button', { name: '閉じる' }).click();
-    await page.locator('[data-doc-hub]').click();
-    await page.locator('select').nth(0).selectOption('打合せ・見積・提案');
-    await page.locator('div[style*="border-top"]', { hasText: '議事録' }).getByRole('button', { name: 'チェック' }).click();
-    await page.getByText(/チェック結果.*置き換えられていない項目が残っています：\{\{存在しない場所\}\}/s).waitFor();
+    // 作った直後の自動チェック：置き換えできなかった {{存在しない場所}} を、ボタンを押さなくても指摘する
+    await page.getByText(/確認してください.*置き換えられていない項目が残っています：\{\{存在しない場所\}\}/s).waitFor();
     assert.deepStrictEqual(errors, []);
   } finally { await browser.close(); await mock.close(); }
 });
@@ -1055,7 +1050,7 @@ test('画面：議事録の自動PDFを止めたとき（AUTO_PDF_MINUTES=false�
     const errors = []; page.on('pageerror', (e) => errors.push(e.message));
     await page.route('**/__lib/doc-button.js', async (route) => {
       let src = fs.readFileSync(require('path').join(__dirname, '..', 'customize', 'doc-button.js'), 'utf8');
-      src = src.replace('var AUTO_PDF_MINUTES = true;', 'var AUTO_PDF_MINUTES = false;');
+      src = src.replace('var AUTO_PDF_MINUTES = true;', 'var AUTO_PDF_MINUTES = false;').replace('var AUTO_PDF_ALL = true;', 'var AUTO_PDF_ALL = false;');
       src = src.replace(/var PDF_SERVER_URL = '[^']*';/, "var PDF_SERVER_URL = '" + (server ? url : 'http://127.0.0.1:1') + "';");
       await route.fulfill({ status: 200, contentType: 'text/javascript; charset=utf-8', body: src });
     });

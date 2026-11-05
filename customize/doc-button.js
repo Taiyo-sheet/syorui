@@ -31,6 +31,7 @@
   var APPROVED = '承認済み';
   // PDF化サーバーのURL（Render に置いた pdf-server/。空にすると、PDF化のボタンは押せなくなる）
   var PDF_SERVER_URL = 'https://ts-pdf-server.onrender.com';
+  var AUTO_PDF_ALL = true;   // true：どの書類も、作ると同時に、PDFも自動で案件に保存する（利用者の希望 2026-11-05。承認は、待たない）。止めたいときは false
   var AUTO_PDF_MINUTES = true;   // true：議事録は、保存と同時に、PDFも自動で保存する（利用者の希望。止めたいときは false にする。どちらでも、保存したあとに「PDFにして保存」を押せる）
   var ACTIVE = '使用中';
   var NAME_LABELS = ['工事名称', '案件名', '現場名', '工事名'];   // ファイル名に使う項目（先に見つかったもの）
@@ -1128,8 +1129,18 @@
       // 作成に成功したら、画面上の「最新 vN」もその場で更新する（まとめ作成が途中で失敗しても、再実行で二重に作らない）
       function makeOne(rec, extra) {
         return createDoc(rec, ctx, extra).then(function (r) {
-          existing[fieldText(rec[MF.name])] = { version: r.version, filename: r.filename, data: r.data };
-          return r;
+          var nm = fieldText(rec[MF.name]);
+          existing[nm] = { version: r.version, filename: r.filename, data: r.data };
+          // 作った直後に、案件くんの情報との食い違い・空欄を、自動で確認する（外部には送らない。ボタンは、押さなくてよい）
+          var chk = extractText(JSZip, r.data, extOf(r.filename)).then(function (t) { r.check = checkText(t, ctx.values); }, function () { r.check = []; });
+          // 作ると同時に、PDFも、案件に保存する（失敗しても、書類は、保存できている）
+          var asks0 = asksOf(rec), isMin0 = asks0.some(function (a) { return a.key === '議事録本文' || a.key === '議事録メモ'; });
+          var wantPdf = PDF_SERVER_URL && ctx.caps && ctx.caps.pdf && (AUTO_PDF_ALL || (AUTO_PDF_MINUTES && isMin0));
+          return chk.then(function () {
+            if (!wantPdf) return r;
+            return convertToPdf(ctx, nm, existing[nm], true).then(function (p) { existing[nm].pdf = { fileKey: null, name: p.name }; r.pdfOk = true; return r; },
+              function (e) { r.pdfErr = (e && e.message) || 'PDF化できませんでした'; return r; });
+          });
         });
       }
       // 議事録などの入力欄（雛形に {{打合せ日}} {{議事録メモ}} などがあるときだけ出す）
@@ -1170,7 +1181,7 @@
             var bar = el('div', 'display:flex;gap:10px;justify-content:space-between;margin-top:16px');
             var del = el('button', 'padding:' + (isMobile ? '12px 16px' : '8px 14px') + ';font-size:' + (isMobile ? '16px' : '14px') + ';cursor:pointer;border:1px solid #c0392b;color:#c0392b;background:#fff;border-radius:6px', 'この行を消す'); del.type = 'button'; del.setAttribute('data-sort-del', '1');
             del.addEventListener('click', function () { ta.value = ''; done(); });
-            var ok = el('button', 'padding:' + (isMobile ? '12px 24px' : '8px 20px') + ';font-size:' + (isMobile ? '16px' : '14px') + ';font-weight:bold;cursor:pointer;border:0;background:#0b5fb8;color:#fff;border-radius:6px', '決定'); ok.type = 'button'; ok.setAttribute('data-sort-ok', '1');
+            var ok = el('button', 'padding:' + (isMobile ? '12px 24px' : '8px 20px') + ';font-size:' + (isMobile ? '16px' : '14px') + ';font-weight:bold;cursor:pointer;border:0;background:#1F3864;color:#fff;border-radius:6px', '決定'); ok.type = 'button'; ok.setAttribute('data-sort-ok', '1');
             ok.addEventListener('click', done);
             bar.appendChild(del); bar.appendChild(ok); sheet.appendChild(bar); cover.appendChild(sheet); document.body.appendChild(cover);
           }
@@ -1349,14 +1360,12 @@
             btn.disabled = true; setMsg('作成しています…', false);
             return makeOne(rec, extra).then(function (r) {
               saveAs(r.data, r.filename);
-              var stay = !!((r.unknown && r.unknown.length) || (r.empty && r.empty.length) || r.billNote);
-              var base = (isMobile ? '保存しました：' : '保存してダウンロードしました：') + r.filename + unknownNote(r.unknown, r.empty) + (r.billNote ? '\n' + r.billNote : '');
-              // 議事録は、保存と同時に、PDFも、案件に自動で保存する（承認は、待たない）
-              var minutesDoc = asks.some(function (a) { return a.key === '議事録本文' || a.key === '議事録メモ'; });
-              if (!(AUTO_PDF_MINUTES && minutesDoc && PDF_SERVER_URL && ctx.caps && ctx.caps.pdf)) { reloadSoon(base + (minutesDoc ? '\n（「PDFにして保存」を押すと、PDFも保存できます）' : ''), stay); return; }
-              setMsg('保存しました。PDFを作っています…（数秒〜十数秒かかります）', false);
-              return convertToPdf(ctx, name, existing[name], true).then(function () { reloadSoon(base + '\nPDFも保存しました', stay); },
-                function (e) { reloadSoon(base + '\n（PDFは、保存できませんでした：' + ((e && e.message) || '') + '。議事録は、保存できています。承認したあと、「PDF化」で、作れます）', true); });
+              var chkNote = (r.check && r.check.length) ? '\n\n【確認してください】\n・' + r.check.join('\n・') : '';
+              var stay = !!((r.unknown && r.unknown.length) || (r.empty && r.empty.length) || r.billNote || chkNote);
+              var base = (isMobile ? '保存しました：' : '保存してダウンロードしました：') + r.filename + (r.pdfOk ? '\nPDFも保存しました' : '') + unknownNote(r.unknown, r.empty) + (r.billNote ? '\n' + r.billNote : '') + chkNote;
+              if (r.pdfErr) base += '\n（PDFは、保存できませんでした：' + r.pdfErr + '。書類は、保存できています。承認のあと、「PDF化」で作れます）';
+              else if (!r.pdfOk && ctx.caps && ctx.caps.pdf && PDF_SERVER_URL) base += '\n（「PDF化」を押すと、PDFも保存できます）';
+              reloadSoon(base, stay || !!r.pdfErr);
             })
               .catch(function (e) { btn.disabled = false; setMsg((e && e.message) || '作成できませんでした', true); });
           });
@@ -1383,16 +1392,7 @@
                 function (e) { done('\n（PDFは、保存できませんでした：' + ((e && e.message) || '') + '。「PDFにして保存」で、もう一度できます）'); });
             }).catch(function (e) { rev.disabled = false; setMsg((e && e.message) || '登録できませんでした', true); });
           });
-          // 書類のチェック：保存した最新の書類を、ダウンロードする前に、画面の中だけで確認する（外部には送りません）
-          var chk = el('button', 'padding:6px 10px;font-size:12px;cursor:pointer', 'チェック'); chk.type = 'button';
-          chk.addEventListener('click', function () {
-            chk.disabled = true; setMsg('「' + name + '」をチェックしています…', false);
-            checkOne(name).then(function (res) {
-              chk.disabled = false;
-              setMsg(res.length ? '「' + name + '」のチェック結果（' + res.length + '件）：\n・' + res.join('\n・') : '「' + name + '」：問題は見つかりませんでした', res.length > 0);
-            }).catch(function (e) { chk.disabled = false; setMsg((e && e.message) || 'チェックできませんでした', true); });
-          });
-          right.appendChild(chk); right.appendChild(rev); right.appendChild(pick);
+          right.appendChild(rev); right.appendChild(pick);
           // 書類関係の承認（承認した人と日時が、書類保管の行に残る。新しい版を作ると、承認は、外れる）
           if (ctx.caps && ctx.caps.approval && !ex.approved) {
             var apb = el('button', 'padding:6px 10px;font-size:12px;cursor:pointer;font-weight:bold', '承認'); apb.type = 'button';
@@ -1443,12 +1443,12 @@
           if (!targets.length) { setMsg(onlyMissing ? scope + 'の書類は、すべて作成済みか、雛形のまま使うものです' : scope + 'の書類は、すべて雛形のまま使うものです（各行の「雛形を開く」で取り出せます）', false); return; }
           if (!confirm(targets.length + '件の書類を作成します。' + (onlyMissing ? '（作成済みの書類は、作りません）' : '作成済みの書類は次の版として作られます。') + (asIs ? '\n（雛形のまま使う ' + asIs + '件は、作成の対象外です）' : '') + '\nよろしいですか？')) return;
           btn.disabled = true;
-          var done = [], failed = [], unknown = [], empty = [];
+          var done = [], failed = [], unknown = [], empty = [], pdfFail = [], checks = [];
           targets.reduce(function (p, rec) {
             return p.then(function () {
               setMsg('作成中…（' + (done.length + failed.length + 1) + '/' + targets.length + '）', false);
               return makeOne(rec).then(function (r) {
-                done.push(r.filename);
+                done.push(r.filename); if (r.pdfErr) pdfFail.push(r.filename); (r.check || []).forEach(function (c) { checks.push(r.filename + '：' + c); });
                 (r.unknown || []).forEach(function (n) { if (unknown.indexOf(n) < 0) unknown.push(n); });
                 (r.empty || []).forEach(function (n) { if (empty.indexOf(n) < 0) empty.push(n); });
               }, function (e) { failed.push(fieldText(rec[MF.name]) + '：' + ((e && e.message) || '失敗')); });
@@ -1456,7 +1456,7 @@
           }, Promise.resolve()).then(function () {
             updateStageLabels();
             if (failed.length) { btn.disabled = false; show(); setMsg('作成 ' + done.length + '件、失敗 ' + failed.length + '件\n' + failed.join('\n') + unknownNote(unknown, empty), true); }
-            else reloadSoon(done.length + '件を保存しました' + unknownNote(unknown, empty), !!(unknown.length || empty.length));
+            else reloadSoon(done.length + '件を保存しました' + (AUTO_PDF_ALL ? '（PDFも保存）' : '') + (pdfFail.length ? '\nPDFを保存できなかった書類：' + pdfFail.join('、') : '') + unknownNote(unknown, empty) + (checks.length ? '\n\n【確認してください】\n・' + checks.join('\n・') : ''), !!(unknown.length || empty.length || pdfFail.length || checks.length));
           });
         });
       }
@@ -1482,7 +1482,7 @@
   var FAB_SIZE = 52;
   function floatingButton(label, onClick) {
     var old = document.querySelector('[data-doc-hub]'); if (old && old.parentNode) old.parentNode.removeChild(old);
-    var fab = el('button', 'position:fixed;right:16px;bottom:96px;z-index:9999;height:' + FAB_SIZE + 'px;min-width:' + FAB_SIZE + 'px;border:0;border-radius:' + (FAB_SIZE / 2) + 'px;background:#0b5fb8;color:#fff;box-shadow:0 4px 12px rgba(0,0,0,.35);cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0 14px;font-size:14px;font-weight:bold;overflow:hidden;white-space:nowrap');
+    var fab = el('button', 'position:fixed;right:16px;bottom:96px;z-index:9999;height:' + FAB_SIZE + 'px;min-width:' + FAB_SIZE + 'px;border:0;border-radius:' + (FAB_SIZE / 2) + 'px;background:#1F3864;color:#fff;box-shadow:0 4px 12px rgba(0,0,0,.35);cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0 14px;font-size:14px;font-weight:bold;overflow:hidden;white-space:nowrap');
     fab.type = 'button'; fab.setAttribute('data-doc-hub', '1'); fab.setAttribute('aria-label', label);
     var icon = el('span', 'font-size:22px;line-height:1', '📄');
     var text = el('span', 'display:inline-block;max-width:0;opacity:0;margin-left:0;transition:max-width .25s,opacity .25s,margin-left .25s', label);
@@ -1544,7 +1544,7 @@
     var olds = document.querySelectorAll('[data-doc-hub]'); Array.prototype.forEach.call(olds, function (o) { if (o.parentNode) o.parentNode.removeChild(o); });
     var wrap = el('div', 'padding:8px 0 4px');
     wrap.setAttribute('data-doc-hub', '1');
-    var b = el('button', 'padding:10px 18px;font-size:15px;font-weight:bold;cursor:pointer;background:#0b5fb8;color:#fff;border:0;border-radius:6px;box-shadow:0 2px 6px rgba(0,0,0,.25)', '📄 ' + label);
+    var b = el('button', 'padding:10px 18px;font-size:15px;font-weight:bold;cursor:pointer;background:#1F3864;color:#fff;border:0;border-radius:22px;box-shadow:0 2px 6px rgba(0,0,0,.25)', '📄 ' + label);
     b.type = 'button'; b.addEventListener('click', onClick);
     wrap.appendChild(b);
     bar.row.parentNode.insertBefore(wrap, bar.row.nextSibling);
@@ -1563,7 +1563,7 @@
     var olds = document.querySelectorAll('[data-doc-hub]'); Array.prototype.forEach.call(olds, function (o) { if (o.parentNode) o.parentNode.removeChild(o); });
     var wrap = el('div', 'padding:6px 0 10px');
     wrap.setAttribute('data-doc-hub', '1');
-    var b = el('button', 'padding:10px 18px;font-size:15px;font-weight:bold;cursor:pointer;background:#0b5fb8;color:#fff;border:0;border-radius:6px;box-shadow:0 2px 6px rgba(0,0,0,.25)', '📄 ' + label);
+    var b = el('button', 'padding:10px 18px;font-size:15px;font-weight:bold;cursor:pointer;background:#1F3864;color:#fff;border:0;border-radius:22px;box-shadow:0 2px 6px rgba(0,0,0,.25)', '📄 ' + label);
     b.type = 'button'; b.addEventListener('click', onClick);
     wrap.appendChild(b);
     row.parentNode.insertBefore(wrap, row);
