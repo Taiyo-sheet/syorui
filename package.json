@@ -15,7 +15,8 @@
     "check-tabs": "node scripts/check-tabs.js",
     "make-test-templates": "node scripts/make-test-templates.js",
     "e2e": "node scripts/e2e-check.js",
-    "check-buttons": "node scripts/check-open-buttons.js"
+    "check-buttons": "node scripts/check-open-buttons.js",
+    "check-links": "node scripts/check-anken-links.js"
   },
   "engines": {
     "node": ">=18"
