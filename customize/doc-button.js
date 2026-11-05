@@ -37,6 +37,10 @@
   // 案件くんの項目のうち、「橋梁」「一般道路」など、書類マスタの「対象」と同じ言葉が入っているもの。
   // その項目名を入れると、案件を開いたときに、対象が自動で選ばれる（空のままなら、画面で手で選ぶ）
   var TARGET_LABEL = '';
+  // 案件くんの「進捗」から、いまの工程（書類マスタの「工程」）を決める。「現在の工程」の項目があれば、そちらを優先する。足りない進捗は、ここに足す
+  var PROGRESS_LABEL = '進捗';
+  var PROGRESS_STAGE = [[/^0\./, '情報取得・現状確認'], [/^1\./, '情報取得・現状確認'], [/^2\./, '情報取得・現状確認'], [/^3\./, '打合せ・見積・提案']];
+  function stageOfProgress(p) { p = String(p || '').trim(); for (var i = 0; i < PROGRESS_STAGE.length; i++) if (PROGRESS_STAGE[i][0].test(p)) return PROGRESS_STAGE[i][1]; return ''; }
   var STAGE_LABEL = '現在の工程';                      // 案件くんにこの項目があれば、その工程を最初に表示
 
   // ---------- 値の整形 ----------
@@ -1604,6 +1608,7 @@
   }
 
 
+
   // 書類関係のタブに、「この案件の請求（請求くん）」の一覧（読み取りだけ。案件番号が同じ請求を、請求くん(829)から読む）
   var billToken = 0;
   var ANKEN_CODES = { '案件番号': '案件番号_0', '決算期＋案件番号': '決算期_案件番号' };
@@ -1611,10 +1616,33 @@
     var my = ++billToken;
     var values = {};
     Object.keys(ANKEN_CODES).forEach(function (l) { var f = record[ANKEN_CODES[l]]; if (f && f.value) values[l] = f.value; });
-    Array.prototype.forEach.call(document.querySelectorAll('[data-doc-bills]'), function (o) { if (o.parentNode) o.parentNode.removeChild(o); });
-    if (!billKeysOf(values).length) return;
+    Array.prototype.forEach.call(document.querySelectorAll('[data-doc-bills-wrap]'), function (o) { if (o.parentNode) o.parentNode.removeChild(o); });
+    // 画面に足す部品は、1つの入れ物（wrap）にまとめる。タブ表示プラグインの行の数え方に、影響しないように、部品の数を、増やさない・場合によって変えない
+    var wrap = el('div', '');
+    wrap.setAttribute('data-doc-bills-wrap', '1');
+    var prog = (record[PROGRESS_LABEL] && record[PROGRESS_LABEL].value) || '', stage = stageOfProgress(prog);
+    if (stage) {
+      var ban = el('div', 'margin:4px 0 8px;border:1px solid #f0d9a8;border-radius:6px;background:#fff8e6;padding:8px 10px;max-width:760px;font-size:13px;display:flex;gap:10px;align-items:center;flex-wrap:wrap');
+      ban.setAttribute('data-doc-stage', '1');
+      ban.appendChild(el('div', 'flex:1;min-width:220px', '📌 いまの進捗' + (prog ? '「' + prog + '」' : '') + '　→　工程「' + stage + '」の書類を、まとめて作れます。'));
+      var sb = el('button', 'padding:6px 12px;font-size:13px;font-weight:bold;cursor:pointer', 'この工程の書類を開く'); sb.type = 'button'; sb.setAttribute('data-doc-stage-open', '1');
+      sb.addEventListener('click', function () { var hub0 = document.querySelector('[data-doc-hub]'); if (hub0) hub0.click(); });
+      ban.appendChild(sb); wrap.appendChild(ban);
+    }
+    var placeWrap = function () {
+      var tries0 = 0;
+      var timer0 = setInterval(function () {
+        if (my !== billToken) { clearInterval(timer0); if (wrap.parentNode) wrap.parentNode.removeChild(wrap); return; }
+        var hub = document.querySelector('[data-doc-hub]');
+        if (!hub) { if (++tries0 > 50 && !document.body.contains(wrap)) clearInterval(timer0); return; }
+        var after = document.querySelector('[data-doc-saved]') || hub;
+        if (after.nextSibling !== wrap) after.parentNode.insertBefore(wrap, after.nextSibling);
+        wrap.style.display = hub.style.display === 'none' ? 'none' : 'block';
+      }, 500);
+    };
+    if (!billKeysOf(values).length) { placeWrap(); return; }
     var box = el('details', 'margin:4px 0 8px;border:1px solid #cfd8e3;border-radius:6px;background:#fff;padding:6px 10px;max-width:760px');
-    box.setAttribute('data-doc-bills', '1');
+    box.setAttribute('data-doc-bills', '1'); wrap.appendChild(box);
     var head = el('summary', 'cursor:pointer;font-weight:bold;font-size:14px', 'この案件の請求（請求くん）　読み込み中…'); box.appendChild(head);
     var body = el('div'); box.appendChild(body);
     var yen = function (n) { return '¥' + Number(n || 0).toLocaleString('ja-JP'); };
@@ -1639,15 +1667,7 @@
       });
       body.appendChild(el('div', 'font-size:12px;color:#666;margin-top:4px', '原価管理表を「書類を作る」で作ると、この請求が、原価明細に入ります。'));
     }, function () { if (my === billToken) { head.textContent = 'この案件の請求（請求くん）　読み込めませんでした'; body.appendChild(el('div', 'font-size:12px;color:#666;margin-top:6px', '請求くん(829)を読む権限が、ないかもしれません。書類は、これまでどおり、作れます。')); } });
-    var tries = 0;
-    var timer = setInterval(function () {
-      if (my !== billToken) { clearInterval(timer); if (box.parentNode) box.parentNode.removeChild(box); return; }
-      var hub = document.querySelector('[data-doc-hub]');
-      if (!hub) { if (++tries > 50 && !document.body.contains(box)) clearInterval(timer); return; }
-      var after = document.querySelector('[data-doc-saved]') || hub;
-      if (after.nextSibling !== box) after.parentNode.insertBefore(box, after.nextSibling);
-      box.style.display = hub.style.display === 'none' ? 'none' : 'block';
-    }, 500);
+    placeWrap();
   }
 
   function onShow(event) {
@@ -1683,7 +1703,7 @@
         NAME_LABELS.some(function (l) { if (values[l]) { projectName = values[l]; return true; } return false; });
         openPanel({
           values: values, caps: caps, projectId: projectId, projectName: projectName || ('案件' + projectId),
-          currentStage: values[STAGE_LABEL] || '', target: TARGET_LABEL ? values[TARGET_LABEL] || '' : '', guessedTarget: guessTarget(projectName)
+          currentStage: values[STAGE_LABEL] || stageOfProgress(values[PROGRESS_LABEL]), target: TARGET_LABEL ? values[TARGET_LABEL] || '' : '', guessedTarget: guessTarget(projectName)
         });
       });
     });

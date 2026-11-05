@@ -21,6 +21,7 @@ const FAKE_KINTONE = `
     c_addr: { type: 'SINGLE_LINE_TEXT', code: 'c_addr', label: '現場住所' },
     c_amount: { type: 'NUMBER', code: 'c_amount', label: '金額', digit: true },
     c_no: { type: 'NUMBER', code: 'c_no', label: '案件番号' },
+    進捗: { type: 'SINGLE_LINE_TEXT', code: '進捗', label: '進捗' },
     書類保管: { type: 'SUBTABLE', code: '書類保管', fields: { 書類保管_書類名: {}, 書類保管_工程: {}, 書類保管_版: {}, 書類保管_作成日: {}, 書類保管_ファイル: {}, 書類保管_承認状況: {}, 書類保管_承認者: {}, 書類保管_承認日時: {}, 書類保管_PDF: {} } }
   };
   function q(params) { var o = []; Object.keys(params || {}).forEach(function (k) { var v = params[k]; if (Array.isArray(v)) v.forEach(function (x, i) { o.push(encodeURIComponent(k + '[' + i + ']') + '=' + encodeURIComponent(x)); }); else if (v != null) o.push(encodeURIComponent(k) + '=' + encodeURIComponent(v)); }); return o.join('&'); }
@@ -395,6 +396,26 @@ test('画面：直したファイルを登録すると、そのPDFも案件に�
     assert.strictEqual(pdfOf(2).length, 0, 'PDFだけ、無い');
     assert.deepStrictEqual(errors.filter((e) => !/Failed to fetch|ERR_|net::/.test(e)), []);
     await ctx.close();
+  } finally { await browser.close(); await mock.close(); }
+});
+
+test('画面：進捗から、いまの工程を決めて、書類関係に案内を出す。ボタンで、書類を作るパネルが、その工程で開く', { skip }, async () => {
+  const mock = createMock(); const url = await mock.listen();
+  const browser = await chromium.launch({ executablePath: CHROMIUM, args: ['--no-sandbox'] });
+  try {
+    await seed(mock);
+    const rec = Object.assign({}, RECORD, { 進捗: { type: 'SINGLE_LINE_TEXT', value: '3.見積り格納' } });
+    const { page, errors } = await openPage(browser, url, '/__page', rec);
+    const box = page.locator('[data-doc-stage]'); await box.waitFor();
+    assert.match(await box.textContent(), /3\.見積り格納.*打合せ・見積・提案/);
+    await page.locator('[data-doc-stage-open]').click();
+    await page.getByText('工程別の書類：').waitFor();
+    assert.strictEqual(await page.locator('select').nth(0).inputValue(), '打合せ・見積・提案', '進捗の工程で、パネルが開く');
+    // 進捗が、対応表にないとき：案内は出ない
+    const p2 = await openPage(browser, url, '/__page', Object.assign({}, RECORD, { 進捗: { type: 'SINGLE_LINE_TEXT', value: '9.まだ対応表にない' } }));
+    await p2.page.waitForTimeout(1500);
+    assert.strictEqual(await p2.page.locator('[data-doc-stage]').count(), 0, '対応表にない進捗では、案内を出さない');
+    assert.deepStrictEqual(errors, []);
   } finally { await browser.close(); await mock.close(); }
 });
 
