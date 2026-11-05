@@ -86,6 +86,7 @@ async function openPage(browser, url, path, record, opt) {
   // 「案件の情報が反映されていない」確認画面は、ふつうの試験では、自動で「このまま作成する」を押す（その画面の試験だけ、自分で押す）
   if (!(opt && opt.manualMissing)) await page.addInitScript(() => { new MutationObserver(() => { const b = document.querySelector('[data-missing-ok]'); if (b) b.click(); }).observe(document, { childList: true, subtree: true }); });
   await page.addInitScript(FAKE_KINTONE);
+  if (opt && opt.before) await opt.before(page);
   await page.goto(url + path);
   await page.evaluate((r) => window.__fire(r), record || RECORD);
   return { page, errors, ctx };
@@ -411,6 +412,7 @@ test('画面：進捗から、いまの工程を決めて、書類関係に案�
     await page.locator('[data-doc-stage-open]').click();
     await page.getByText('工程別の書類：').waitFor();
     assert.strictEqual(await page.locator('select').nth(0).inputValue(), '打合せ・見積・提案', '進捗の工程で、パネルが開く');
+    assert.strictEqual(await page.locator('[data-doc-bills]').count(), 0, '請求の一覧は、既定では出ない（現場カルテで見る）。入れ物（案内）は、ある');
     // 受注のあとは、施工予定日・施工実施日・施工完了日で、工程を決める。失注は、案内なし
     const stageOf = async (extra) => { const q = await openPage(browser, url, '/__page', Object.assign({}, RECORD, extra)); await q.page.waitForTimeout(1500); const n = await q.page.locator('[data-doc-stage]').count(); return n ? await q.page.locator('[data-doc-stage]').textContent() : ''; };
     const P = (v) => ({ 進捗: { type: 'SINGLE_LINE_TEXT', value: v } }), D = (c) => ({ [c]: { type: 'DATE', value: '2026-11-24' } });
@@ -464,7 +466,7 @@ test('画面：原価管理表は、請求くんの請求が原価明細に入�
     const kx = mock.addFile(await z.generateAsync({ type: 'nodebuffer' }), 'genka.xlsx');
     mock.addRecord('10', { 書類名: { value: '原価管理表' }, 工程: { value: '請求・原価管理' }, 表示順: { value: '900' }, 説明: { value: '' }, 見られる立場: { value: ['営業'] }, 使用状況: { value: '使用中' }, 雛形: { value: [{ fileKey: kx, name: 'genka.xlsx' }] } });
     const rec = Object.assign({}, RECORD, { 案件番号_0: { type: 'SINGLE_LINE_TEXT', value: '2026' } });
-    const { page, errors } = await openPage(browser, url, '/__page', rec);
+    const { page, errors } = await openPage(browser, url, '/__page', rec, { before: async (pg) => { await pg.route('**/__lib/doc-button.js', async (route) => { const src = fs.readFileSync(require('path').join(__dirname, '..', 'customize', 'doc-button.js'), 'utf8').replace('var SHOW_BILLS_BOX = false;', 'var SHOW_BILLS_BOX = true;'); await route.fulfill({ status: 200, contentType: 'text/javascript; charset=utf-8', body: src }); }); } });
     // 書類関係：この案件の請求の一覧（別の案件の請求は出ない）
     const bills = page.locator('[data-doc-bills]');
     await bills.waitFor();

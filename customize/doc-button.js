@@ -1621,6 +1621,7 @@
 
   // 書類関係のタブに、「この案件の請求（請求くん）」の一覧（読み取りだけ。案件番号が同じ請求を、請求くん(829)から読む）
   var billToken = 0;
+  var SHOW_BILLS_BOX = false;   // 請求の一覧は、現場カルテ(826)の「この案件の請求履歴」で見る。案件くんの書類関係には、出さない（true にすると出る）。入れ物（wrap）は、残す＝画面に足す部品の数は、変えない
   var ANKEN_CODES = { '案件番号': '案件番号_0', '決算期＋案件番号': '決算期_案件番号' };
   function billBox(record) {
     var my = ++billToken;
@@ -1650,7 +1651,7 @@
         wrap.style.display = hub.style.display === 'none' ? 'none' : 'block';
       }, 500);
     };
-    if (!billKeysOf(values).length) { placeWrap(); return; }
+    if (!SHOW_BILLS_BOX || !billKeysOf(values).length) { placeWrap(); return; }
     var box = el('details', 'margin:4px 0 8px;border:1px solid #cfd8e3;border-radius:6px;background:#fff;padding:6px 10px;max-width:760px');
     box.setAttribute('data-doc-bills', '1'); wrap.appendChild(box);
     var head = el('summary', 'cursor:pointer;font-weight:bold;font-size:14px', 'この案件の請求（請求くん）　読み込み中…'); box.appendChild(head);
