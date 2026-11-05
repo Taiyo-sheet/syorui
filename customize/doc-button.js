@@ -511,7 +511,7 @@
   // 予算02(735)：この案件の、承認済み（部長承認完了）の予算の、契約金額（税抜）を予算金額に、総原価を予算原価に入れる（複数あれば、レコード番号が新しいもの）。まだなければ、予算原価は、発注くんの注文の合計
   var BUDGET = { app: 735, anken: 'anken', total: '契約金額_税抜合計', cost: '総原価合計02', status: 'ステータス', fixed: ['部長承認完了'] };
   var GENKA = { sheet: '原価管理', firstRow: 24, lastRow: 173, date: 'B', vendor: 'F', item: 'R',
-    cols: { '材料（発注なし）': 'AJ', '発注連動': 'AV' }, other: 'AV', budget: 'AQ3', budgetAmount: 'AQ2', wonAmount: 'AG2', wonCost: 'AG3', wonProfit: 'AG4', wonRate: 'AG5' };   // 区分から科目の列へ（材料→材料費、発注連動→外注費。それ以外は外注費）
+    cols: { '材料（発注なし）': 'AJ', '発注連動': 'AV', 'リース費': 'AN', '労務費': 'AR', '経費': 'AZ' }, other: 'AV', budget: 'AQ3', budgetAmount: 'AQ2', wonAmount: 'AG2', wonCost: 'AG3', wonProfit: 'AG4', wonRate: 'AG5' };   // 区分から科目の列へ（材料→材料費、発注連動→外注費。それ以外は外注費）
   function xmlEsc(t) { return String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
   function excelSerial(iso) {
     var m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})/);

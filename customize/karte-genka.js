@@ -11,7 +11,7 @@ window.__TS_DOC_ENGINE_ONLY = true;   // doc-button.js を、「部品を貸す�
   'use strict';
   var MASTER_APP_NAME = '書類マスタ', DOC_NAME = '原価管理表', BILL_APP = 829, BTN_ID = 'ts-karte-genka-btn';
   // 現場カルテの項目コード
-  var F = { anken: 'anken', name: 'proj_name', code: 'koji_code', code2: 'proj_code', moto: 'moto', start: 'start_date', end: 'end_date', sales: 'sales', budget: 'budget', ordered: 'ordered' };
+  var F = { anken: 'anken', name: 'proj_name', code: 'koji_code', code2: 'proj_code', moto: 'moto', start: 'start_date', end: 'end_date', sales: 'sales', budget: 'budget', ordered: 'ordered', actual: 'actual_cost' };
 
   function api(method, path, params) { return kintone.api(kintone.api.url(path, true), method, params); }
   function val(rec, c) { var f = rec && rec[c]; return f && f.value != null ? String(f.value).trim() : ''; }
@@ -46,13 +46,16 @@ window.__TS_DOC_ENGINE_ONLY = true;   // doc-button.js を、「部品を貸す�
       var buf = res[0], billRecs = res[1];
       return E.fillTemplate(JSZip, buf, 'xlsx', values).then(function (out) {
         var rows = billRecs ? E.billRowsOf(billRecs) : [];
+        // 現場カルテの実際原価と、請求履歴の合計との差（紙の請求・リース品など、請求くんに入っていない原価）を、1行で足す。内訳は、あとから、利用者が書き換える
+        var actual = num(rec, F.actual), billed = rows.reduce(function (a, x) { return a + (Number(x.amount) || 0); }, 0), diff = billRecs ? actual - billed : 0;
+        if (diff > 0) rows.push({ date: '', vendor: '（請求くんにない原価）', item: '現場カルテの実際原価との差額（紙の請求・リース品など。内訳を入力してください）', kubun: '経費', amount: diff });
         // 現場カルテの利益率と、同じ数字になる対応（利益率＝（受注金額−原価）÷受注金額。原価＝①予算(01)＝見積のときの原価／②発注確定額／③実際原価）
         //   受注：受注金額、受注原価＝予算(01)　→ 01利益率    予算：予算金額＝受注金額、予算原価＝発注確定額　→ 02利益率・粗利（見込）
         var sales = num(rec, F.sales);
         var won = { total: sales, cost: num(rec, F.budget) };
         var budget = { total: sales, cost: num(rec, F.ordered) };
         return E.genkaFill(JSZip, out.data, rows, null, won.total ? won : null, budget.total ? budget : null).then(function (r) {
-          return { data: r.data, count: r.count, billsOk: billRecs !== null, isGenka: r.isGenka, name: (val(rec, F.name) || '案件') + '_原価管理表.xlsx', sales: sales, budget: budget };
+          return { data: r.data, count: r.count, diff: diff > 0 ? diff : 0, billsOk: billRecs !== null, isGenka: r.isGenka, name: (val(rec, F.name) || '案件') + '_原価管理表.xlsx', sales: sales, budget: budget };
         });
       });
     });
@@ -76,7 +79,7 @@ window.__TS_DOC_ENGINE_ONLY = true;   // doc-button.js を、「部品を貸す�
       build(rec).then(function (r) {
         if (!r.isGenka) throw new Error('書類マスタの「' + DOC_NAME + '」が、原価管理表の雛形ではありません');
         save(r.data, r.name); b.disabled = false;
-        msg.textContent = 'ダウンロードしました：' + r.name + '（請求履歴 ' + (r.billsOk ? r.count + ' 行' : '：請求くんを読めませんでした') + (r.sales ? '／受注金額・' : '／') + (r.budget.total ? '予算を入れました）' : '予算は空です）');
+        msg.textContent = 'ダウンロードしました：' + r.name + '（請求履歴 ' + (r.billsOk ? r.count + ' 行' + (r.diff ? '（うち、差額の行 ' + r.diff.toLocaleString('ja-JP') + ' 円）' : '') : '：請求くんを読めませんでした') + (r.sales ? '／受注金額・' : '／') + (r.budget.total ? '予算を入れました）' : '予算は空です）');
       }).catch(function (e) { b.disabled = false; msg.style.color = '#c0392b'; msg.textContent = '作れませんでした：' + ((e && e.message) || e); });
     });
     wrap.appendChild(b); wrap.appendChild(msg); host.appendChild(wrap);
