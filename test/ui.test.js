@@ -142,7 +142,7 @@ test('画面：ボタン表示→工程・立場の絞り込み→作成して�
     assert.ok(Buffer.concat(got).equals(mock.state.files[f.fileKey].buf), 'ダウンロードされた書類と、案件に保存された書類が同じ');
     const xml = await (await JSZip.loadAsync(mock.state.files[f.fileKey].buf)).file('word/document.xml').async('string');
     assert.match(xml.replace(/<[^>]*>/g, ''), /案件名：東京Aビル 改修工事/);
-    assert.match(xml.replace(/<[^>]*>/g, ''), /打合せ議事次第 v1 /);
+    assert.match(xml.replace(/<[^>]*>/g, ''), /打合せ議事次第 第1版 /);
     // 置き換えできなかった {{ }} を知らせる
     assert.match(await page.locator('div', { hasText: '置き換えできずに残った項目' }).last().textContent(), /存在しない項目/);
 
