@@ -1480,7 +1480,8 @@
           var asIs = withTpl.filter(function (r) { return kindOf(r) === 'plain'; }).length;
           btn.disabled = false; setMsg('', false);
           if (!targets.length) { setMsg(onlyMissing ? scope + 'の書類は、すべて作成済みか、雛形のまま使うものです' : scope + 'の書類は、すべて雛形のまま使うものです（各行の「雛形を開く」で取り出せます）', false); return; }
-          if (!btn.__ok) { askOk(targets.length + '件の書類を作成します。' + (onlyMissing ? '（作成済みの書類は、作りません）' : '作成済みの書類は次の版として作られます。') + (asIs ? '\n（雛形のまま使う ' + asIs + '件は、作成の対象外です）' : '') + '\nよろしいですか？', '作成する').then(function (g) { if (g) { btn.__ok = true; btn.click(); btn.__ok = false; } }); return; }
+          if (!btn.__ok) { askOk(targets.length + '件の書類を作成します。' + (onlyMissing ? '（作成済みの書類は、作りません）' : '作成済みの書類は次の版として作られます。') + (asIs ? '\n（雛形のまま使う ' + asIs + '件は、作成の対象外です）' : '') + '\nよろしいですか？', '作成する').then(function (g) { if (g) { btn.__ok = true; btn.click(); } }); return; }
+          btn.__ok = false;   // 確認ずみの印は、ここで使い切る（確認は、非同期のため、押した直後には戻さない）
           btn.disabled = true;
           var done = [], failed = [], unknown = [], empty = [], pdfFail = [], checks = [];
           targets.reduce(function (p, rec) {
