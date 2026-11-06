@@ -5,6 +5,7 @@
  *
  *   node scripts/apply-customize.js            … 登録後の姿を表示するだけ（何も変えない）
  *   node scripts/apply-customize.js --yes      … 実際に登録して公開する
+ *   --manifest=ファイル  … 登録内容のファイルを指定する（省略時は customize-manifest.json。アプリごとに別のファイルを使える）
  *
  * なぜ @kintone/customize-uploader を使わないか
  *   customize-uploader は、マニフェストに書いたものでカスタマイズ設定を「丸ごと置き換える」ため、
@@ -22,15 +23,35 @@ const { client } = require('./lib');
 const ROOT = path.join(__dirname, '..');
 
 function hasBackup(appId) {
-  const d = path.join(ROOT, 'backup');
+  const d = process.env.KINTONE_BACKUP_DIR || path.join(ROOT, 'backup');
   return fs.existsSync(d) && fs.readdirSync(d).some((n) => n.startsWith(appId + '_') && fs.existsSync(path.join(d, n, 'customize_live.json')));
 }
 const label = (it) => it.type === 'URL' ? it.url : (it.file && it.file.name) || '(ファイル)';
 
+// 編集中（プレビュー）と、公開中（本番）の、フォームの違い
+async function pendingChanges(k, appId) {
+  const out = [];
+  const get = async (p, q) => { try { return await k.api('GET', p, q); } catch (e) { return null; } };
+  const [pl, ll, pf, lf, pv, lv] = await Promise.all([
+    get('/k/v1/preview/app/form/layout', { app: appId }), get('/k/v1/app/form/layout', { app: appId }),
+    get('/k/v1/preview/app/form/fields', { app: appId }), get('/k/v1/app/form/fields', { app: appId }),
+    get('/k/v1/preview/app/views', { app: appId }), get('/k/v1/app/views', { app: appId })]);
+  if (pl && ll && JSON.stringify(pl.layout) !== JSON.stringify(ll.layout)) out.push('フォームの並び（行数 公開中 ' + ll.layout.length + ' → 編集中 ' + pl.layout.length + '）');
+  if (pf && lf) {
+    const a = Object.keys(pf.properties), b = new Set(Object.keys(lf.properties));
+    const added = a.filter((c) => !b.has(c)), removed = [...b].filter((c) => !pf.properties[c]);
+    if (added.length || removed.length) out.push('項目：追加 ' + added.length + '件' + (removed.length ? '／削除 ' + removed.length + '件' : ''));
+  }
+  if (pv && lv && JSON.stringify(pv.views) !== JSON.stringify(lv.views)) out.push('一覧（ビュー）');
+  return out;
+}
+
 async function main() {
   const go = process.argv.includes('--yes');
-  const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'customize-manifest.json'), 'utf8'));
-  const appId = String(process.env.KINTONE_APP_ID || manifest.app);
+  const mArg = process.argv.find((a) => a.startsWith('--manifest='));
+  const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, mArg ? mArg.slice(11) : 'customize-manifest.json'), 'utf8'));
+  // --manifest= を指定したときは、そのファイルの app を使う（環境変数 KINTONE_APP_ID で、うっかり別のアプリに入れないため）
+  const appId = String((mArg ? manifest.app : process.env.KINTONE_APP_ID) || manifest.app);
   const k = client();
 
   const app = await k.api('GET', '/k/v1/app', { id: appId });
@@ -64,6 +85,13 @@ async function main() {
   }
   const before = ['desktop', 'mobile'].reduce((n, e) => n + ((cur[e].js || []).length + (cur[e].css || []).length), 0);
   console.log('\n既存の設定：' + before + '件（すべて残ります）');
+  // 公開すると、フォームの編集中の変更（まだ公開していないもの）も、一緒に公開されてしまう。公開前に、編集中の変更が無いか確かめる
+  const pend = await pendingChanges(k, appId);
+  if (pend.length) {
+    console.log('\n【注意】アプリ設定に、まだ公開していない変更（編集中）があります。このまま公開すると、これも、一緒に公開されます：');
+    pend.forEach((t) => console.log('  ・' + t));
+    if (go && !process.argv.includes('--include-pending')) { console.error('\n公開を止めました。利用者が、その変更を、公開するか、取り消してから、もう一度、実行してください（それでも、一緒に公開してよいときだけ、--include-pending）。'); process.exit(3); }
+  }
   if (!go) { console.log('\n※ これは確認だけです。実際に登録するには、最後に --yes を付けてください。'); return; }
 
   if (!hasBackup(appId)) { console.error('\nバックアップがありません。先に  node scripts/backup-app.js ' + appId + '  を実行してください。'); process.exit(2); }

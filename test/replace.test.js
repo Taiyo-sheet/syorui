@@ -99,7 +99,7 @@ test('fieldText：桁区切りは「桁区切りを表示する」項目だけ�
 });
 
 test('ファイル名：使えない文字・改行を置き換える', () => {
-  assert.strictEqual(lib.buildFilename('A/B:C\n工事', '見積書', 3, 'xlsx'), 'A_B_C_工事_見積書_v3.xlsx');
+  assert.strictEqual(lib.buildFilename('A/B:C\n工事', '見積書', 3, 'xlsx'), 'A_B_C_工事_見積書_第3版.xlsx');
 });
 test('クエリの引用符をエスケープする', () => {
   assert.strictEqual(lib.quote('a"b\\c'), '"a\\"b\\\\c"');
@@ -126,4 +126,238 @@ test('hasPlaceholders：{{ }}があれば true、なければ（雛形のまま�
 test('guessTarget：「〇〇橋」「高架橋」は橋梁、地名の「橋本」などは一般道路', () => {
   for (const n of ['東京高架橋 補修工事', '第二多摩川橋 床版工事', '新大橋', '跨線橋 ロードヒーティング', '〇〇橋梁 点検', '隅田川橋 左岸']) assert.strictEqual(lib.guessTarget(n), '橋梁', n);
   for (const n of ['国道17号 ロードヒーティング', '橋本市道 舗装工事', '橋口交差点 改良', '東京Aビル 改修工事', '', undefined]) assert.strictEqual(lib.guessTarget(n), '一般道路', String(n));
+});
+
+test('checkText：残った {{ }}・空の欄・案件くんの値との違い・見本の文・空の日付を指摘する／問題なければ空', () => {
+  const ok = '【打合せ議事録】\n■ 工事名称：東京Aビル\n■ 工事場所：千代田区1-1\n■ 日時：2026年10月22日\n';
+  assert.deepStrictEqual(lib.checkText(ok, { 工事名称: '東京Aビル', 工事場所: '千代田区1-1' }), []);
+  const bad = '■ 工事名称：大阪Bビル\n■ 工事場所：\n■ 担当：{{担当者}}\n（例：工程確認／課題整理）\n日時：　　年　　月　　日\n';
+  const r = lib.checkText(bad, { 工事名称: '東京Aビル', 工事場所: '千代田区1-1' });
+  assert.ok(r.some((x) => /置き換えられていない.*\{\{担当者\}\}/.test(x)), r.join('|'));
+  assert.ok(r.some((x) => /値が空の欄.*工事場所/.test(x)), r.join('|'));
+  assert.ok(r.some((x) => /工事名称.*違います.*大阪Bビル.*東京Aビル/.test(x)), r.join('|'));
+  assert.ok(r.some((x) => /見本の文/.test(x)), r.join('|'));
+  assert.ok(r.some((x) => /日付が空欄/.test(x)), r.join('|'));
+});
+
+test('tidyMemo：記号をそろえ、空行を取り除く', () => {
+  assert.strictEqual(lib.tidyMemo('- a\n\n● b\n・c\n* d'), '・a\n・b\n・c\n・d');
+});
+
+test('checkText：案件くんの全項目を突き合わせる（違えば指摘／複数行・作成日などは対象外／空白の違いは無視）', () => {
+  const v = { 発注者: '国土交通省 岐阜国道事務所', 備考: '1行目\n2行目', 作成日: '2026年10月22日', 元請: '株式会社サンプル' };
+  assert.deepStrictEqual(lib.checkText('■ 発注者：国土交通省　岐阜国道事務所\n■ 備考：別の内容\n作成日：2020年1月1日\n■ 元請：株式会社サンプル', v), [], '空白の違い・複数行・作成日は、指摘しない');
+  const r = lib.checkText('■ 発注者：国土交通省 高山国道事務所', v);
+  assert.ok(r.some((x) => /「発注者」が、案件くんの値と違います（書類：国土交通省 高山国道事務所／案件くん：国土交通省 岐阜国道事務所）/.test(x)), r.join('|'));
+});
+
+test('summarizeLocal：文字起こしを、決定事項・ToDo・次回予定・出席者・場所・議題・内容に分ける（簡易）', () => {
+  const t = 'えー、出席者：太田、國井、藤原\n場所：現場事務所\n工程の確認について。\n夜間規制の時間は、9時から17時で決定しました。\n来週までに太田さんが見積書を送付します。\nあの、現場は雪が多いそうです。\n次回は11月1日にやります。';
+  const r = lib.summarizeLocal(t);
+  assert.strictEqual(r['出席者'], '太田、國井、藤原'); assert.strictEqual(r['場所'], '現場事務所');
+  assert.match(r['議題'], /工程の確認について/); assert.match(r['決定事項'], /夜間規制.*決定/);
+  assert.strictEqual(r['ToDo'], '来週｜太田｜見積書を送付する'); assert.match(r['議事録メモ'], /雪が多い/); assert.doesNotMatch(r['議事録メモ'], /^あの/);
+  assert.match(r['次回予定'], /11月1日/);
+  assert.deepStrictEqual(lib.summarizeLocal(''), { '出席者': '', '場所': '', '議題': '', '議事録メモ': '', '決定事項': '', 'ToDo': '', '次回予定': '' });
+});
+
+test('summarizeLocal：見出し付き（Copilot などの、まとめ）は、見出しごとに振り分ける', () => {
+  const t = '【出席者】太田、國井\n【場所】現場事務所\n【議題】\n・工程の確認\n【打合せ内容】\n・来週、現地調査\n・資料は金曜までに送付\n【決定事項】\n- 着工は11月上旬\n【ToDo】\n・10/25まで 太田 見積を出す\n【次回予定】次回は11月1日';
+  const r = lib.summarizeLocal(t);
+  assert.strictEqual(r['出席者'], '太田、國井'); assert.strictEqual(r['場所'], '現場事務所');
+  assert.strictEqual(r['議題'], '・工程の確認'); assert.strictEqual(r['議事録メモ'], '・来週、現地調査\n・資料は金曜までに送付');
+  assert.strictEqual(r['決定事項'], '・着工は11月上旬'); assert.strictEqual(r['ToDo'], '・10/25まで 太田 見積を出す'); assert.strictEqual(r['次回予定'], '次回は11月1日');
+  const r2 = lib.summarizeLocal('## 決定事項\n1. 着工は11月上旬\n## アクションアイテム\n- 太田：見積を送る（10/25）');
+  assert.strictEqual(r2['決定事項'], '・1. 着工は11月上旬'); assert.strictEqual(r2['ToDo'], '・太田：見積を送る（10/25）');
+});
+
+test('maskForAI：電話・メール・郵便番号・金額・「〇〇さん」の名前・指定した言葉を符号にし、返事で元に戻す', () => {
+  const t = '太田さんが03-1234-5678に連絡。メールは ota@example.co.jp。〒950-0000 新潟。金額は1,200,000円。担当の藤原様と、サンプル建設の件。皆さんお願いします。';
+  const m = lib.maskForAI(t, ['サンプル建設']);
+  for (const s of ['太田', '03-1234-5678', 'ota@example.co.jp', '950-0000', '1,200,000円', '藤原', 'サンプル建設']) assert.ok(!m.masked.includes(s), s + ' が、残っている：' + m.masked);
+  assert.match(m.masked, /【人物1】さん/); assert.match(m.masked, /皆さん/, '「皆さん」などは、人名として、扱わない');
+  assert.strictEqual(m.unmask('・' + m.masked.match(/【人物1】/)[0] + 'さんが、' + m.masked.match(/【電話1】/)[0] + 'に連絡'), '・太田さんが、03-1234-5678に連絡');
+  assert.strictEqual(m.unmask('【人物99】は、そのまま'), '【人物99】は、そのまま', '知らない符号は、そのまま');
+  assert.strictEqual(lib.maskForAI('', []).count, 0);
+});
+
+test('formatMinutes：見出し付きの、ひとかたまりの文章にする（空は「なし」、出席者は「不明」）', () => {
+  const t = lib.formatMinutes({ 出席者: '', 場所: '現場事務所', 議題: '・工程', 議事録メモ: '・現調', 決定事項: '・11月着工', ToDo: '', 次回予定: '' });
+  assert.strictEqual(t, '【出席者】\n不明\n\n【場所】\n現場事務所\n\n【議題】\n・工程\n\n【打合せ内容】\n・現調\n\n【決定事項】\n・11月着工\n\n【ToDo】\nなし\n\n【次回予定】\nなし');
+});
+
+test('{{議事録本文}}（Word）：見出しは帯の段落、箇条書きは段落、ToDo（期限｜担当｜内容）は表になる。XMLが壊れない', async () => {
+  const tpl = await build(); const z = await JSZip.loadAsync(tpl.docx);
+  z.file('word/document.xml', '<w:document xmlns:w="x"><w:body><w:p><w:r><w:t>上の文</w:t></w:r></w:p><w:p><w:pPr><w:jc w:val="left"/></w:pPr><w:r><w:t>{{議事録</w:t></w:r><w:r><w:t>本文}}</w:t></w:r></w:p><w:p><w:r><w:t>下の文</w:t></w:r></w:p></w:body></w:document>');
+  const buf = await z.generateAsync({ type: 'nodebuffer' });
+  const body = '【決定事項】\n・規制は9時から17時\n\n【ToDo】\n・10/25｜太田｜見積を出す\n・10/27|國井|工程表を共有\n・メモだけの行\n\n【次回予定】';
+  const out = await lib.fillTemplate(JSZip, buf, 'docx', { 議事録本文: body });
+  const xml = await (await JSZip.loadAsync(out.data)).file('word/document.xml').async('string');
+  const count = (re) => (xml.match(re) || []).length;
+  assert.strictEqual(count(/<w:p[ >]/g), count(/<\/w:p>/g), '<w:p> の数が合う'); assert.strictEqual(count(/<w:tbl>/g), 1, 'ToDoの表は1つ');
+  assert.strictEqual(count(/<w:tr>/g), 3, '見出し行＋2行（「期限｜担当｜内容」の形のものだけ）'); assert.strictEqual(count(/<w:r[ >]/g), count(/<\/w:r>/g));
+  assert.strictEqual(count(/w:fill="1F3864"/g), 3, '見出し3つが帯');
+  const flat = xml.replace(/<\/w:p>|<\/w:tc>/g, '\n').replace(/<[^>]*>/g, '');
+  assert.match(flat, /上の文/); assert.match(flat, /下の文/); assert.match(flat, /■ 決定事項/); assert.match(flat, /・規制は9時から17時/);
+  assert.match(flat, /見積を出す\s+太田\s+10\/25/, '表：内容・担当・期限'); assert.match(flat, /・メモだけの行/); assert.match(flat, /■ 次回予定\s+なし/, '中身が空の見出しは「なし」');
+  assert.ok(!out.unknown.includes('議事録本文'));
+});
+
+test('summarizeLocal：ふつうに話した文章（「〇〇で、△△さんと□□で行いました」「10月25日までに太田さんが…します」）も、分けられる', () => {
+  const t = 'えー、今日の打合せは、現場事務所で、太田さんと國井と、元請の藤原さんで行いました。\nまず、夜間規制の時間ですが、9時から17時で調整する方向になりました。\n資材の搬入は、金曜の午前にしたいです。元請の了承待ちです。\n決まったことは、規制は9時から17時、搬入は金曜の午前です。\n10月25日までに太田さんが見積書を出します。10月27日までに國井が工程表を共有します。\n次回は、11月1日、現場事務所です。';
+  const r = lib.summarizeLocal(t);
+  assert.strictEqual(r['場所'], '現場事務所');
+  assert.strictEqual(r['出席者'], '太田、國井、藤原（元請）');
+  assert.strictEqual(r['議題'], '夜間規制の時間');
+  assert.strictEqual(r['決定事項'], '規制は9時から17時\n搬入は金曜の午前');
+  assert.strictEqual(r['ToDo'], '10/25｜太田｜見積書を出す\n10/27｜國井｜工程表を共有する');
+  assert.strictEqual(r['次回予定'], '11月1日、現場事務所');
+  assert.match(r['議事録メモ'], /9時から17時で調整する方向/); assert.match(r['議事録メモ'], /元請の了承待ち/);
+  assert.doesNotMatch(r['議事録メモ'], /今日の打合せ/);
+});
+
+test('summarizeLocal：話すときに、見出しの言葉（出席者は／場所は／議題は／決まったことは／宿題は）を言うと、ほぼ正確に分けられる', () => {
+  const t = '出席者は、太田さんと國井さんと、元請の藤原さんです。\n場所は、現場事務所です。\n議題は、夜間規制の時間、資材の搬入日です。\n9時から17時で調整する方向になりました。\n決まったことは、規制は9時から17時、搬入は金曜の午前です。\n宿題は、10/25｜太田｜見積書を出す、10/27｜國井｜工程表を共有する。\n次回は、11月1日、現場事務所です。';
+  const r = lib.summarizeLocal(t);
+  assert.strictEqual(r['出席者'], '太田、國井、藤原（元請）');
+  assert.strictEqual(r['場所'], '現場事務所');
+  assert.strictEqual(r['議題'], '夜間規制の時間\n資材の搬入日');
+  assert.strictEqual(r['決定事項'], '規制は9時から17時\n搬入は金曜の午前');
+  assert.strictEqual(r['ToDo'], '10/25｜太田｜見積書を出す\n10/27｜國井｜工程表を共有する');
+  assert.strictEqual(r['次回予定'], '11月1日、現場事務所');
+  assert.match(r['議事録メモ'], /9時から17時で調整する方向/);
+});
+
+test('Copilotの返事（太字・表・番号つき見出し）も、見出しごとに分けられる／枠に貼った文章は、見出しの形に整う', () => {
+  const bold = '**出席者**\n- 太田\n- 國井\n\n**場所**\n現場事務所\n\n**決定事項**\n- 規制は9時から17時\n\n**ToDo**\n- 10/25｜太田｜見積書を出す';
+  let r = lib.summarizeLocal(bold);
+  assert.strictEqual(r['出席者'], '太田、國井'); assert.strictEqual(r['場所'], '現場事務所');
+  assert.strictEqual(r['決定事項'], '・規制は9時から17時'); assert.strictEqual(r['ToDo'], '・10/25｜太田｜見積書を出す');
+  const inline = '以下にまとめました。\n\n**【出席者】** 太田、國井\n**【場所】** 現場事務所\n**【ToDo】**\n・10/25｜太田｜見積書を出す';
+  r = lib.summarizeLocal(inline); assert.strictEqual(r['出席者'], '太田、國井'); assert.strictEqual(r['場所'], '現場事務所');
+  const table = '| 項目 | 内容 |\n|---|---|\n| 出席者 | 太田、國井 |\n| 場所 | 現場事務所 |\n| 決定事項 | 規制は9時から17時 |';
+  r = lib.summarizeLocal(table); assert.strictEqual(r['出席者'], '太田、國井'); assert.strictEqual(r['決定事項'], '・規制は9時から17時');
+  assert.doesNotMatch(lib.stripMarkdown('**太字** と `コード` と __下線__'), /\*\*|`|__/);
+  // 整える：【見出し】が2つ以上あれば、そのまま／太字だけの返事は、見出しの形に
+  const ok = '【出席者】\n太田\n\n【場所】\n現場';
+  assert.strictEqual(lib.canonicalMinutes(ok), ok);
+  assert.match(lib.canonicalMinutes(bold), /^【出席者】\n太田、國井\n\n【場所】\n現場事務所/);
+  assert.strictEqual(lib.canonicalMinutes('ふつうの文章です'), 'ふつうの文章です', '見出しが無い文章は、触らない');
+});
+
+test('summarizeLocal：見出しの言葉を言わない、ふつうの話し方（出席・場所・議題・決定・担当・次回）も、分けられる', () => {
+  let r = lib.summarizeLocal('今日は現場事務所で、太田さん、國井さん、元請の藤原さんが出席して打合せをしました。夜間規制の時間について確認しました。9時から17時で調整することになりました。資材の搬入は金曜の午前にします。藤原さんは近隣への周知をお願いします。次回は11月1日です。');
+  assert.strictEqual(r['場所'], '現場事務所'); assert.strictEqual(r['出席者'], '太田、國井、藤原（元請）'); assert.strictEqual(r['議題'], '夜間規制の時間');
+  assert.strictEqual(r['決定事項'], '9時から17時で調整することになりました\n資材の搬入は金曜の午前にします');
+  assert.strictEqual(r['ToDo'], '｜藤原｜近隣への周知'); assert.strictEqual(r['次回予定'], '11月1日');
+  r = lib.summarizeLocal('えー、本日はオンラインで、山田さんと鈴木さんが参加しました。工程表の見直しについて話し合いました。着工は11月上旬ということで合意しました。鈴木さんには見積書の再提出をお願いします。10月30日までに山田さんが工程表を共有します。');
+  assert.strictEqual(r['場所'], 'オンライン'); assert.strictEqual(r['出席者'], '山田、鈴木'); assert.strictEqual(r['議題'], '工程表の見直し');
+  assert.strictEqual(r['決定事項'], '着工は11月上旬ということで合意しました');
+  assert.strictEqual(r['ToDo'], '｜鈴木｜見積書の再提出\n10/30｜山田｜工程表を共有する');
+});
+
+// ---------- 原価管理表：請求くんの請求を、原価明細に入れる ----------
+async function genkaBook(nRows = 150) {
+  const z = new JSZip();
+  z.file('[Content_Types].xml', '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>');
+  z.file('xl/workbook.xml', '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="プロット" sheetId="2" r:id="rId2"/><sheet name="原価管理" sheetId="1" r:id="rId1"/></sheets><calcPr fullCalcOnLoad="1"/></workbook>');
+  z.file('xl/_rels/workbook.xml.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="x/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="x/worksheet" Target="worksheets/sheet2.xml"/></Relationships>');
+  let rows = '<row r="2"><c r="AQ2" s="6"><f>SUM(AQ8:AT10)</f></c></row><row r="3"><c r="E3" t="inlineStr"><is><t>{{案件名}}</t></is></c><c r="AQ3" s="6"/><c r="AG2" s="7"/><c r="AG3" s="7"/><c r="AG4" s="7"/><c r="AG5" s="8"/></row>';
+  for (let r = 24; r < 24 + nRows; r++) rows += `<row r="${r}"><c r="A${r}"><v>${r - 23}</v></c><c r="B${r}" s="3"/><c r="F${r}" s="4"></c><c r="R${r}" s="4"/><c r="AJ${r}" s="5"/><c r="AV${r}" s="5"/><c r="BD${r}"><f>SUM(AJ${r}:BC${r})</f></c></row>`;
+  z.file('xl/worksheets/sheet1.xml', '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>' + rows + '</sheetData></worksheet>');
+  z.file('xl/worksheets/sheet2.xml', '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="24"><c r="B24"/></row></sheetData></worksheet>');
+  return z.generateAsync({ type: 'nodebuffer' });
+}
+const bill = (date, vendor, kubun, items, sub) => ({
+  billing_date: { value: date }, vendor_name: { value: vendor }, kubun: { value: kubun }, subtotal: { value: String(sub || '') },
+  details: { value: items.map(([n, a]) => ({ value: { item_name: { value: n }, bill_amount: { value: String(a) } } })) },
+});
+
+test('原価管理表：請求くんの請求が、日付順に、数字のまま、科目の列に入る（業者名・内容は文字）', async () => {
+  const rows = lib.billRowsOf([
+    bill('2026-06-10', 'B工業', '発注連動', [['外注工事A', 200000]]),
+    bill('2026-06-08', 'A商事', '材料（発注なし）', [['電線', 12000], ['端子', 3000], ['値引き0円', 0]]),
+  ]);
+  assert.deepStrictEqual(rows.map((r) => [r.date, r.vendor, r.item, r.amount]), [['2026-06-08', 'A商事', '電線', 12000], ['2026-06-08', 'A商事', '端子', 3000], ['2026-06-10', 'B工業', '外注工事A', 200000]], '明細の1行が1行。0円は入れない');
+  const r = await lib.genkaFill(JSZip, await genkaBook(), rows);
+  assert.strictEqual(r.isGenka, true); assert.strictEqual(r.count, 3);
+  const x = await (await JSZip.loadAsync(r.data)).file('xl/worksheets/sheet1.xml').async('string');
+  const serial = lib.excelSerial('2026-06-08');
+  assert.strictEqual(serial, 46181, 'Excelの日付の数（2026-06-08）');
+  assert.match(x, new RegExp('<c r="B24" s="3"><v>' + serial + '</v></c>'), '日付は数字（月ごとの集計の計算式が動く）');
+  assert.match(x, /<c r="F24" s="4" t="inlineStr"><is><t xml:space="preserve">A商事<\/t><\/is><\/c>/);
+  assert.match(x, /<c r="R25" s="4" t="inlineStr"><is><t xml:space="preserve">端子<\/t>/);
+  assert.match(x, /<c r="AJ24" s="5"><v>12000<\/v><\/c>/, '材料（発注なし）→ 材料費の列');
+  assert.match(x, /<c r="AV26" s="5"><v>200000<\/v><\/c>/, '発注連動 → 外注費の列');
+  assert.match(x, /<c r="BD24"><f>SUM\(AJ24:BC24\)<\/f><\/c>/, '合計の計算式は、そのまま');
+  assert.match(x, /<c r="E3" t="inlineStr"><is><t>\{\{案件名\}\}<\/t>/, '明細以外は、触らない');
+  assert.match(x, /<c r="B27" s="3"\/>/, '請求のない行は、空のまま');
+});
+
+test('原価管理表：150行を超える分は入れずに知らせる／原価管理のシートがないExcelは、そのまま', async () => {
+  const many = Array.from({ length: 160 }, (_, i) => ({ date: '2026-06-01', vendor: 'V', item: '品' + i, kubun: '発注連動', amount: 1 }));
+  const r = await lib.genkaFill(JSZip, await genkaBook(), many);
+  assert.strictEqual(r.count, 150); assert.strictEqual(r.over, 10);
+  const plain = await (async () => { const z = new JSZip(); z.file('xl/workbook.xml', '<workbook xmlns="x"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>'); z.file('xl/_rels/workbook.xml.rels', '<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>'); z.file('xl/worksheets/sheet1.xml', '<worksheet/>'); return z.generateAsync({ type: 'nodebuffer' }); })();
+  assert.strictEqual(await lib.isGenkaBook(JSZip, plain), false);
+  assert.strictEqual((await lib.genkaFill(JSZip, plain, many)).isGenka, false);
+  assert.strictEqual(await lib.isGenkaBook(JSZip, await genkaBook()), true);
+});
+
+test('原価管理表：発注くんの注文（業者へ送付済・完了）の税抜合計が、予算原価に入る', async () => {
+  const od = (st, v) => ({ 'ステータス': { value: st }, subtotal: { value: String(v) } });
+  const b = lib.orderBudgetOf([od('業者へ送付済', 250000), od('完了', 5000000), od('作成中', 999), od('社内承認待ち', 888), od('完了', 0)]);
+  assert.deepStrictEqual(b, { count: 2, total: 5250000 }, '発注した注文だけ（作成中・承認待ち・0円は入れない）');
+  const r = await lib.genkaFill(JSZip, await genkaBook(), [], b);
+  const x = await (await JSZip.loadAsync(r.data)).file('xl/worksheets/sheet1.xml').async('string');
+  assert.match(x, /<c r="AQ3" s="6"><v>5250000<\/v><\/c>/, '予算原価（AQ3）に、数字で入る');
+  const none = await lib.genkaFill(JSZip, await genkaBook(), [], { count: 0, total: 0 });
+  assert.match(await (await JSZip.loadAsync(none.data)).file('xl/worksheets/sheet1.xml').async('string'), /<c r="AQ3" s="6"\/>/, '注文がなければ、空のまま');
+});
+
+test('原価管理表：見積くんの内定した見積が、受注金額・受注原価に入る（粗利は計算式）。内定がなければ空', async () => {
+  const es = (id, st, total, cost, no) => ({ $id: { value: String(id) }, 'ステータス': { value: st }, '改めて計': { value: String(total) }, '税抜合計': { value: String(total + 87066) }, '原価合計': { value: String(cost) }, '見積No': { value: no } });
+  assert.strictEqual(lib.wonEstimateOf([es(1, '見積作成中', 100, 50, 'A'), es(2, '部長承認完了', 200, 90, 'B')]), null, '内定の前は、受注として入れない');
+  const w = lib.wonEstimateOf([es(3, '内定', 1000000, 700000, 'TS-1'), es(5, '予算02作成案内', 1200000, 800000, 'TS-2'), es(4, '見積作成中', 1, 1, 'X')]);
+  assert.deepStrictEqual(w, { total: 1200000, cost: 800000, no: 'TS-2', count: 2 }, '内定以降のうち、レコード番号が新しいもの');
+  const r = await lib.genkaFill(JSZip, await genkaBook(), [], { count: 0, total: 0 }, w);
+  const x = await (await JSZip.loadAsync(r.data)).file('xl/worksheets/sheet1.xml').async('string');
+  assert.match(x, /<c r="AG2" s="7"><v>1200000<\/v><\/c>/); assert.match(x, /<c r="AG3" s="7"><v>800000<\/v><\/c>/);
+  assert.match(x, /<c r="AG4" s="7"><f>AG2-AG3<\/f><\/c>/); assert.match(x, /<c r="AG5" s="8"><f>IF\(AG2=0,0,AG4\/AG2\)<\/f><\/c>/);
+  const none = await lib.genkaFill(JSZip, await genkaBook(), [], { count: 0, total: 0 }, null);
+  assert.match(await (await JSZip.loadAsync(none.data)).file('xl/worksheets/sheet1.xml').async('string'), /<c r="AG2" s="7"\/>/, '内定がなければ、空のまま');
+});
+
+test('原価管理表：予算02の承認済みの予算が、予算金額・予算原価に入る。なければ、予算原価は発注くんの注文の合計', async () => {
+  const bd = (id, st, total, cost) => ({ $id: { value: String(id) }, 'ステータス': { value: st }, '契約金額_税抜合計': { value: String(total) }, '総原価合計02': { value: String(cost) } });
+  assert.strictEqual(lib.budget02Of([bd(1, '予算02作成中', 300000, 200000), bd(2, '課長確認中', 1, 1)]), null, '承認の前は、入れない');
+  const b = lib.budget02Of([bd(3, '部長承認完了', 16787066, 10041300), bd(7, '部長承認完了', 17000000, 10500000), bd(8, '予算02作成中', 1, 1)]);
+  assert.deepStrictEqual(b, { total: 17000000, cost: 10500000, count: 2 }, '承認済みのうち、新しいもの');
+  const x = await (await JSZip.loadAsync((await lib.genkaFill(JSZip, await genkaBook(), [], { count: 1, total: 777 }, null, b)).data)).file('xl/worksheets/sheet1.xml').async('string');
+  assert.match(x, /<c r="AQ2" s="6"><v>17000000<\/v><\/c>/, '予算金額（計算式を、数字に置き換える）'); assert.match(x, /<c r="AQ3" s="6"><v>10500000<\/v><\/c>/, '予算原価＝予算02の総原価（発注くんの合計より優先）');
+  const y = await (await JSZip.loadAsync((await lib.genkaFill(JSZip, await genkaBook(), [], { count: 1, total: 777 }, null, null)).data)).file('xl/worksheets/sheet1.xml').async('string');
+  assert.match(y, /<c r="AQ2" s="6"><f>SUM\(AQ8:AT10\)<\/f><\/c>/, '予算02がなければ、予算金額の計算式は、そのまま'); assert.match(y, /<c r="AQ3" s="6"><v>777<\/v><\/c>/, '予算原価は、発注くんの合計');
+});
+
+// 安全衛生報告書（グリーンファイル）：「入力」シートの工期（自・至）は、年・月・日の数値のセルに入れる。ふつうのExcelには、触らない
+async function greenBook() {
+  const z = new JSZip();
+  z.file('[Content_Types].xml', '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>');
+  z.file('xl/workbook.xml', '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="入力" sheetId="1" r:id="rId1"/><sheet name="入力チェック" sheetId="2" r:id="rId2"/></sheets></workbook>');
+  z.file('xl/_rels/workbook.xml.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="x/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="x/worksheet" Target="worksheets/sheet2.xml"/></Relationships>');
+  z.file('xl/worksheets/sheet1.xml', '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="23"><c r="G23" s="258"/><c r="H23" s="259"/><c r="I23" s="187"/><c r="J23" s="188"/><c r="L23" s="190"/><c r="N23" s="191"/><c r="O23" s="192"/></row></sheetData></worksheet>');
+  z.file('xl/worksheets/sheet2.xml', '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData/></worksheet>');
+  return z.generateAsync({ type: 'nodebuffer' });
+}
+test('グリーンファイル：工期（自・至）を、年・月・日の数値で入れる／日付が無ければ入れない／ふつうのExcelは、そのまま', async () => {
+  const r = await lib.greenFill(JSZip, await greenBook(), { '📅施工予定日': '2026年12月3日', '🛠️施工完了日': '2027年2月15日' });
+  assert.strictEqual(r.isGreen, true); assert.strictEqual(r.from, true); assert.strictEqual(r.to, true);
+  const xml = await (await JSZip.loadAsync(r.data)).file('xl/worksheets/sheet1.xml').async('string');
+  assert.match(xml, /<c r="G23" s="258"><v>2026<\/v><\/c>/); assert.match(xml, /<c r="I23" s="187"><v>12<\/v><\/c>/); assert.match(xml, /<c r="J23" s="188"><v>3<\/v><\/c>/);
+  assert.match(xml, /<c r="L23" s="190"><v>2027<\/v><\/c>/); assert.match(xml, /<c r="N23" s="191"><v>2<\/v><\/c>/); assert.match(xml, /<c r="O23" s="192"><v>15<\/v><\/c>/);
+  const half = await lib.greenFill(JSZip, await greenBook(), { '📅施工予定日': '2026年12月3日' });
+  assert.strictEqual(half.from, true); assert.strictEqual(half.to, false);
+  const xml2 = await (await JSZip.loadAsync(half.data)).file('xl/worksheets/sheet1.xml').async('string');
+  assert.match(xml2, /<c r="L23" s="190"\/>/, '完了日が無いときは、空のまま');
+  assert.strictEqual((await lib.greenFill(JSZip, await genkaBook(), { '📅施工予定日': '2026年12月3日' })).isGreen, false);
 });

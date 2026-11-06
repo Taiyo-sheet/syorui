@@ -19,7 +19,7 @@ async function main() {
   const appId = process.argv[2] || process.env.KINTONE_APP_ID;
   if (!appId) { console.error('アプリ番号を指定してください（例：node scripts/backup-app.js 575）'); process.exit(1); }
   const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..*/, '').replace('T', '_');
-  const dir = path.join(__dirname, '..', 'backup', appId + '_' + stamp);
+  const dir = path.join(process.env.KINTONE_BACKUP_DIR || path.join(__dirname, '..', 'backup'), appId + '_' + stamp);
   fs.mkdirSync(path.join(dir, 'files'), { recursive: true });
 
   const items = [

@@ -55,7 +55,7 @@ function client() {
     const text = await res.text();
     let json; try { json = JSON.parse(text); } catch (e) { json = { message: text.slice(0, 200) }; }
     if (!res.ok) {
-      const err = new Error(method + ' ' + p + ' が失敗しました（' + res.status + '）：' + (json.message || '') + (json.code ? ' [' + json.code + ']' : ''));
+      const err = new Error(method + ' ' + p + ' が失敗しました（' + res.status + '）：' + (json.message || '') + (json.code ? ' [' + json.code + ']' : '') + (json.errors ? '\n詳細：' + JSON.stringify(json.errors).slice(0, 600) : ''));
       err.status = res.status; err.code = json.code;
       throw err;
     }
