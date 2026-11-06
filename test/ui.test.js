@@ -94,9 +94,11 @@ async function openPage(browser, url, path, record, opt) {
 }
 
 async function openStage(page, st) {
+  await page.locator('details[data-stage="' + st + '"]').waitFor({ state: 'attached' });   // 画面の読み込みが終わってから、他の工程を閉じる
   // 他の工程は、閉じる（以前の画面と同じく、見えるのは1つの工程だけにして、同名の書類・ボタンが重ならないようにする）
   await page.locator('details[data-stage][open]').evaluateAll((os, keep) => os.forEach((o) => { if (o.getAttribute('data-stage') !== keep) o.open = false; }), st);
-  const d = page.locator('details[data-stage="' + st + '"]'); if ((await d.getAttribute('open')) === null) await d.locator('summary').click(); await d.locator('[data-doc-row], [data-stage-batch]').first().waitFor(); }
+  const d = page.locator('details[data-stage="' + st + '"]'); if ((await d.getAttribute('open')) === null) await d.locator('summary').click(); await d.locator('[data-doc-row], [data-stage-batch]').first().waitFor();
+  await page.waitForFunction((s) => { const o = document.querySelectorAll('details[data-stage][open]'); return o.length === 1 && o[0].getAttribute('data-stage') === s; }, st, { timeout: 8000 }).catch(async (e) => { console.log('DBGSTATE', JSON.stringify(await page.evaluate(() => [...document.querySelectorAll('details[data-stage]')].map((d) => [d.getAttribute('data-stage'), d.open, d.querySelectorAll('[data-doc-row]').length]))), 'wanted', st); throw e; }); }
 const skip = !chromium || !CHROMIUM ? 'Chromium が見つからないためスキップ' : false;
 
 test('画面：ボタン表示→工程・立場の絞り込み→作成して保存→最新vN→v2作成', { skip }, async () => {
