@@ -43,7 +43,8 @@ async function main() {
   }
   const live = await k.api('GET', '/k/v1/app/form/fields', { app: APP });
   const pre = await k.api('GET', '/k/v1/preview/app/form/fields', { app: APP });
-  if (Object.keys(live.properties).length !== Object.keys(pre.properties).length) { console.error('編集中（未公開）の変更があります。止めました。'); process.exit(2); }
+  const onlyMine = Object.keys(pre.properties).filter((c) => !live.properties[c]);
+  if (onlyMine.length && !(onlyMine.length === 1 && onlyMine[0] === CODE)) { console.error('編集中（未公開）の変更があります。止めました。'); process.exit(2); }
   if (live.properties[CODE]) { console.log('「' + CODE + '」は、すでにあります。何もしません。'); return; }
   const lay = await k.api('GET', '/k/v1/app/form/layout', { app: APP });
   const idx = lay.layout.findIndex((x) => x.type === 'ROW' && x.fields.some((f) => f.code === '書類名'));
@@ -51,8 +52,9 @@ async function main() {
   console.log('足す欄：' + CODE + '（文字列1行）／場所：書類名の行の、すぐ下／いま ' + Object.keys(live.properties).length + '項目・' + rowsOf(lay) + '行');
   if (!go) { console.log('\n※ 確認だけです。実際に足すには --yes'); return; }
   if (!hasBackup()) { console.error('バックアップがありません。先に  npm run backup -- 879'); process.exit(3); }
-  await k.api('POST', '/k/v1/preview/app/form/fields', { app: APP, properties: { [CODE]: { type: 'SINGLE_LINE_TEXT', code: CODE, label: CODE, maxLength: '10' } } });
+  if (!pre.properties[CODE]) await k.api('POST', '/k/v1/preview/app/form/fields', { app: APP, properties: { [CODE]: { type: 'SINGLE_LINE_TEXT', code: CODE, label: CODE, maxLength: '10' } } });
   const lay2 = await k.api('GET', '/k/v1/preview/app/form/layout', { app: APP });
+  lay2.layout = lay2.layout.filter((x) => !(x.type === 'ROW' && x.fields.some((f) => f.code === CODE)));   // 欄を足すと、末尾に自動で置かれるため、いったん外して、書類名の行の下に置き直す
   const at = lay2.layout.findIndex((x) => x.type === 'ROW' && x.fields.some((f) => f.code === '書類名'));
   lay2.layout.splice(at + 1, 0, { type: 'ROW', fields: [{ type: 'SINGLE_LINE_TEXT', code: CODE, size: { width: '200' } }] });
   await k.api('PUT', '/k/v1/preview/app/form/layout', { app: APP, layout: lay2.layout });
