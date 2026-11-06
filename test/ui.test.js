@@ -16,6 +16,7 @@ let chromium; try { chromium = require('playwright-core').chromium; } catch (e) 
 
 // ページに差し込む、kintone オブジェクトの簡易版（PC・モバイルで共通に使う部分）
 const FAKE_KINTONE = `
+  window.__confirms = []; new MutationObserver(function () { var o = document.querySelector('[data-ts-confirm]'); if (o && !o.__seen) { o.__seen = true; window.__confirms.push(o.innerText); var b = o.querySelector('[data-ts-ok]'); if (b) b.click(); } }).observe(document, { childList: true, subtree: true });
   var FIELDS = {
     c_name: { type: 'SINGLE_LINE_TEXT', code: 'c_name', label: '案件名' },
     c_addr: { type: 'SINGLE_LINE_TEXT', code: 'c_addr', label: '現場住所' },
@@ -221,7 +222,7 @@ test('画面：{{ }}のない雛形は「雛形を開く」（そのまま保存
     // まとめて作成：{{ }}のある書類だけ（雛形のままの1件は対象外）
     await page.getByRole('button', { name: 'この工程をまとめて作成' }).click();
     await page.getByText('1件を保存しました').waitFor();
-    assert.ok(dialogs.some((m) => /1件の書類を作成します/.test(m) && /雛形のまま使う 1件/.test(m)), dialogs.join('|'));
+    assert.ok((await page.evaluate(() => window.__confirms)).some((m) => /1件の書類を作成します/.test(m) && /雛形のまま使う 1件/.test(m)), '');
     assert.deepStrictEqual(stored(mock).map((r) => r.name), ['打合せ議事次第']);
     assert.deepStrictEqual(errors, []);
   } finally { await browser.close(); await mock.close(); }
@@ -659,7 +660,7 @@ test('画面：書類関係の承認（承認者と日時が残る）。新し�
     await page.getByText('未承認').waitFor();
     await page.locator('div[data-doc-row]', { hasText: '打合せ議事次第' }).getByRole('button', { name: '承認', exact: true }).click();
     await page.getByText(/1件を承認しました/).waitFor();
-    assert.ok(dialogs.some((m) => /承認します/.test(m) && /置き換えられていない|チェックの指摘/.test(m)), '承認の前に、チェックの結果を見せる：' + dialogs.join('|'));
+    assert.ok((await page.evaluate(() => window.__confirms)).some((m) => /承認します/.test(m) && /置き換えられていない|チェックの指摘/.test(m)), '承認の前に、チェックの結果を見せる：' + '');
     const row = mock.state.records['575'][0]['書類保管'].value[0].value;
     assert.strictEqual(row['書類保管_承認状況'].value, '承認済み');
     assert.ok(row['書類保管_承認者'].value && /^\d{4}-\d{2}-\d{2}T/.test(row['書類保管_承認日時'].value), '承認者と日時が残る');
