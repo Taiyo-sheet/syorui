@@ -338,3 +338,26 @@ test('原価管理表：予算02の承認済みの予算が、予算金額・予
   const y = await (await JSZip.loadAsync((await lib.genkaFill(JSZip, await genkaBook(), [], { count: 1, total: 777 }, null, null)).data)).file('xl/worksheets/sheet1.xml').async('string');
   assert.match(y, /<c r="AQ2" s="6"><f>SUM\(AQ8:AT10\)<\/f><\/c>/, '予算02がなければ、予算金額の計算式は、そのまま'); assert.match(y, /<c r="AQ3" s="6"><v>777<\/v><\/c>/, '予算原価は、発注くんの合計');
 });
+
+// 安全衛生報告書（グリーンファイル）：「入力」シートの工期（自・至）は、年・月・日の数値のセルに入れる。ふつうのExcelには、触らない
+async function greenBook() {
+  const z = new JSZip();
+  z.file('[Content_Types].xml', '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>');
+  z.file('xl/workbook.xml', '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="入力" sheetId="1" r:id="rId1"/><sheet name="入力チェック" sheetId="2" r:id="rId2"/></sheets></workbook>');
+  z.file('xl/_rels/workbook.xml.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="x/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="x/worksheet" Target="worksheets/sheet2.xml"/></Relationships>');
+  z.file('xl/worksheets/sheet1.xml', '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="23"><c r="G23" s="258"/><c r="H23" s="259"/><c r="I23" s="187"/><c r="J23" s="188"/><c r="L23" s="190"/><c r="N23" s="191"/><c r="O23" s="192"/></row></sheetData></worksheet>');
+  z.file('xl/worksheets/sheet2.xml', '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData/></worksheet>');
+  return z.generateAsync({ type: 'nodebuffer' });
+}
+test('グリーンファイル：工期（自・至）を、年・月・日の数値で入れる／日付が無ければ入れない／ふつうのExcelは、そのまま', async () => {
+  const r = await lib.greenFill(JSZip, await greenBook(), { '📅施工予定日': '2026年12月3日', '🛠️施工完了日': '2027年2月15日' });
+  assert.strictEqual(r.isGreen, true); assert.strictEqual(r.from, true); assert.strictEqual(r.to, true);
+  const xml = await (await JSZip.loadAsync(r.data)).file('xl/worksheets/sheet1.xml').async('string');
+  assert.match(xml, /<c r="G23" s="258"><v>2026<\/v><\/c>/); assert.match(xml, /<c r="I23" s="187"><v>12<\/v><\/c>/); assert.match(xml, /<c r="J23" s="188"><v>3<\/v><\/c>/);
+  assert.match(xml, /<c r="L23" s="190"><v>2027<\/v><\/c>/); assert.match(xml, /<c r="N23" s="191"><v>2<\/v><\/c>/); assert.match(xml, /<c r="O23" s="192"><v>15<\/v><\/c>/);
+  const half = await lib.greenFill(JSZip, await greenBook(), { '📅施工予定日': '2026年12月3日' });
+  assert.strictEqual(half.from, true); assert.strictEqual(half.to, false);
+  const xml2 = await (await JSZip.loadAsync(half.data)).file('xl/worksheets/sheet1.xml').async('string');
+  assert.match(xml2, /<c r="L23" s="190"\/>/, '完了日が無いときは、空のまま');
+  assert.strictEqual((await lib.greenFill(JSZip, await genkaBook(), { '📅施工予定日': '2026年12月3日' })).isGreen, false);
+});

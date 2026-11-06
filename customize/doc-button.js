@@ -625,6 +625,47 @@
       });
     });
   }
+  // 安全衛生報告書（グリーンファイル）：「入力」シートの工期（自・至）は、年・月・日が別々の数値のセルのため、{{ }}では入れられない。数値で入れる
+  var GREEN = { sheet: '入力', check: '入力チェック', from: { y: 'G23', m: 'I23', d: 'J23', labels: ['📅施工予定日', '施工予定日'] }, to: { y: 'L23', m: 'N23', d: 'O23', labels: ['🛠️施工完了日', '施工完了日'] } };
+  function ymdOf(values, labels) {
+    for (var i = 0; i < labels.length; i++) {
+      var m = String((values || {})[labels[i]] || '').match(/(\d{4})\D+(\d{1,2})\D+(\d{1,2})/);
+      if (m) return [Number(m[1]), Number(m[2]), Number(m[3])];
+    }
+    return null;
+  }
+  function greenFill(JSZipLib, buf, values) {
+    return JSZipLib.loadAsync(buf).then(function (zip) {
+      var wbf = zip.file('xl/workbook.xml'), rf = zip.file('xl/_rels/workbook.xml.rels');
+      if (!wbf || !rf) return { data: buf, isGreen: false };
+      return Promise.all([wbf.async('string'), rf.async('string')]).then(function (xs) {
+        var sheets = (xs[0].match(/<sheet\b[^>]*>/g) || []);
+        var hasName = function (n) { return sheets.some(function (t) { return t.indexOf('name="' + n + '"') >= 0; }); };
+        if (!hasName(GREEN.sheet) || !hasName(GREEN.check)) return { data: buf, isGreen: false };
+        var tag = sheets.filter(function (t) { return t.indexOf('name="' + GREEN.sheet + '"') >= 0; })[0];
+        var rid = tag && (tag.match(/r:id="([^"]+)"/) || [])[1];
+        var rel = rid && (xs[1].match(/<Relationship\b[^>]*>/g) || []).filter(function (t) { return t.indexOf('Id="' + rid + '"') >= 0; })[0];
+        var target = rel && (rel.match(/Target="([^"]+)"/) || [])[1];
+        var path = target && 'xl/' + target.replace(/^\/?(xl\/)?/, '');
+        var sf = path && zip.file(path); if (!sf) return { data: buf, isGreen: false };
+        return sf.async('string').then(function (xml) {
+          var done = { from: false, to: false };
+          [['from', GREEN.from], ['to', GREEN.to]].forEach(function (pair) {
+            var ymd = ymdOf(values, pair[1].labels); if (!ymd) return;
+            ['y', 'm', 'd'].forEach(function (k, i) {
+              var ref = pair[1][k], re = new RegExp('<c r="' + ref + '"([^>]*?)(?:/>|>[\\s\\S]*?</c>)'), m = xml.match(re);
+              if (!m) return;
+              var attrs = m[1].replace(/\s+t="[^"]*"/, '').replace(/\/$/, '');
+              xml = xml.replace(re, function () { return '<c r="' + ref + '"' + attrs + '><v>' + ymd[i] + '</v></c>'; });
+            });
+            done[pair[0]] = true;
+          });
+          zip.file(path, xml);
+          return zip.generateAsync({ type: 'arraybuffer' }).then(function (data) { return { data: data, isGreen: true, from: done.from, to: done.to }; });
+        });
+      });
+    });
+  }
   // 原価管理表の雛形か（Excelで、「原価管理」という名前のシートがあるか）
   function isGenkaBook(JSZipLib, buf) {
     return JSZipLib.loadAsync(buf).then(function (zip) { var f = zip.file('xl/workbook.xml'); return f ? f.async('string') : ''; })
@@ -644,13 +685,13 @@
 
   // 書類マスタ（master-template.js）が、「試しに作る」で、この部品だけを借りるときの出口（この画面では、ボタンなどは、一切出さない）
   if (typeof kintone !== 'undefined' && typeof window !== 'undefined' && window.__TS_DOC_ENGINE_ONLY) {
-    window.TSDocEngine = { genkaFill: genkaFill, billRowsOf: billRowsOf, formatMinutes: formatMinutes, fillTemplate: fillTemplate, buildValues: buildValues, checkText: checkText, extractText: extractText, fieldText: fieldText, ASK: ASK, NAME_LABELS: NAME_LABELS };
+    window.TSDocEngine = { greenFill: greenFill, genkaFill: genkaFill, billRowsOf: billRowsOf, formatMinutes: formatMinutes, fillTemplate: fillTemplate, buildValues: buildValues, checkText: checkText, extractText: extractText, fieldText: fieldText, ASK: ASK, NAME_LABELS: NAME_LABELS };
     return;
   }
   // Node（テスト）から使うときは、ここまでの部品だけを渡して終わる
   if (typeof kintone === 'undefined') {
     if (typeof module !== 'undefined' && module.exports) {
-      module.exports = { genkaFill: genkaFill, billRowsOf: billRowsOf, orderBudgetOf: orderBudgetOf, wonEstimateOf: wonEstimateOf, budget02Of: budget02Of, excelSerial: excelSerial, isGenkaBook: isGenkaBook, canonicalMinutes: canonicalMinutes, stripMarkdown: stripMarkdown, emptyFieldsOf: emptyFieldsOf, formatMinutes: formatMinutes, maskForAI: maskForAI, summarizeLocal: summarizeLocal, checkText: checkText, extractText: extractText, tidyMemo: tidyMemo, fieldText: fieldText, replacePlaceholders: replacePlaceholders, fillTemplate: fillTemplate, hasPlaceholders: hasPlaceholders, guessTarget: guessTarget, buildFilename: buildFilename, buildValues: buildValues, quote: quote, SUB: SUB, MF: MF, today: today };
+      module.exports = { greenFill: greenFill, genkaFill: genkaFill, billRowsOf: billRowsOf, orderBudgetOf: orderBudgetOf, wonEstimateOf: wonEstimateOf, budget02Of: budget02Of, excelSerial: excelSerial, isGenkaBook: isGenkaBook, canonicalMinutes: canonicalMinutes, stripMarkdown: stripMarkdown, emptyFieldsOf: emptyFieldsOf, formatMinutes: formatMinutes, maskForAI: maskForAI, summarizeLocal: summarizeLocal, checkText: checkText, extractText: extractText, tidyMemo: tidyMemo, fieldText: fieldText, replacePlaceholders: replacePlaceholders, fillTemplate: fillTemplate, hasPlaceholders: hasPlaceholders, guessTarget: guessTarget, buildFilename: buildFilename, buildValues: buildValues, quote: quote, SUB: SUB, MF: MF, today: today };
     }
     return;
   }
@@ -953,6 +994,19 @@
     });
   }
 
+  function withGreen(ext, out, ctx) {
+    if (ext !== 'xlsx') return Promise.resolve(out);
+    return greenFill(JSZip, out.data, ctx.values).then(function (r) {
+      if (!r.isGreen) return out;
+      out.data = r.data;
+      var parts = [];
+      if (r.from && r.to) parts.push('工期（自・至）を、「入力」シートに入れました（案件くんの施工予定日・施工完了日）');
+      else parts.push('工期は、案件くんの「施工予定日」「施工完了日」が空のため、' + (r.from || r.to ? '片方だけ' : '') + '入れていません。「入力」シートの工期を選んでください');
+      out.billNote = (out.billNote ? out.billNote + '\n' : '') + parts.join('');
+      return out;
+    }, function () { return out; });
+  }
+
   function createDoc(masterRec, ctx, extra) {
     var docName = fieldText(masterRec[MF.name]);
     var files = masterRec[MF.template].value;
@@ -966,7 +1020,7 @@
       var version = (cur ? cur.version : 0) + 1;
       var blank = {}; ASK.forEach(function (a) { blank[a.key] = askDefault(a); });   // 入力されなかった項目の言葉（なければ空のまま入れて、あとで知らせる）
       var values = Object.assign(blank, ctx.values, extra || {}, { '版': 'v' + version, '書類名': docName });
-      return fillTemplate(JSZip, res[1], ext, values).then(function (out) { return withBills(ext, out, ctx); }).then(function (out) {
+      return fillTemplate(JSZip, res[1], ext, values).then(function (out) { return withBills(ext, out, ctx); }).then(function (out) { return withGreen(ext, out, ctx); }).then(function (out) {
         var filename = buildFilename(ctx.projectName, docName, version, ext);
         return storeRow(record, ctx, docName, fieldText(masterRec[MF.stage]), version, filename, out.data).then(function (r) {
           r.unknown = out.unknown; r.empty = out.empty; r.billNote = out.billNote;
