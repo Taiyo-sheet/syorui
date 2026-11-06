@@ -23,7 +23,7 @@
 
   var APP_NAMES = { master: '書類マスタ' };
   // 書類マスタの項目コード（scripts/create-apps.js で作ると、この名前になる）
-  var MF = { stage: '工程', order: '表示順', name: '書類名', desc: '説明', template: '雛形', audience: '見られる立場', target: '対象', status: '使用状況' };
+  var MF = { stage: '工程', order: '表示順', name: '書類名', desc: '説明', template: '雛形', audience: '見られる立場', target: '対象', status: '使用状況', docNo: '書類番号' };
   // 案件くんの「書類保管」表（scripts/add-doc-storage.js で足す）の項目コード
   var SUB = { table: '書類保管', name: '書類保管_書類名', stage: '書類保管_工程', version: '書類保管_版', file: '書類保管_ファイル', at: '書類保管_作成日',
     // 承認とPDF（scripts/add-approval-fields.js で、書類保管の表に足す列。足すまでは、承認・PDF化のボタンは出ない）
@@ -515,8 +515,11 @@
   var BRIDGE = /高架|跨線|橋梁|[^\s\u3000橋]橋(?![本口田爪立場詰間])/;
   function guessTarget(name) { return BRIDGE.test(String(name || '')) ? '橋梁' : '一般道路'; }
   function safeName(s) { return String(s).replace(/[\u0000-\u001F\\\/:*?"<>|]/g, '_').slice(0, 120); }
-  function buildFilename(projectName, docName, version, ext) {
-    return safeName(projectName + '_' + docName + '_v' + version) + (ext ? '.' + ext : '');
+  // ファイル名：「番号_書類名_案件名_第N版」（書類マスタに書類番号があるとき）／「案件名_書類名_第N版」（ないとき）
+  function docNoOf(rec) { var n = String(fieldText(rec && rec[MF.docNo]) || '').trim(); return /^\d+$/.test(n) && n.length < 2 ? '0' + n : n; }
+  function buildFilename(projectName, docName, version, ext, docNo) {
+    var base = docNo ? docNo + '_' + docName + '_' + projectName : projectName + '_' + docName;
+    return safeName(base + '_第' + version + '版') + (ext ? '.' + ext : '');
   }
   function quote(s) { return '"' + String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"'; }
 
@@ -1019,9 +1022,9 @@
       var record = res[0], cur = existingOf(record)[docName];
       var version = (cur ? cur.version : 0) + 1;
       var blank = {}; ASK.forEach(function (a) { blank[a.key] = askDefault(a); });   // 入力されなかった項目の言葉（なければ空のまま入れて、あとで知らせる）
-      var values = Object.assign(blank, ctx.values, extra || {}, { '版': 'v' + version, '書類名': docName });
+      var values = Object.assign(blank, ctx.values, extra || {}, { '版': '第' + version + '版', '書類名': docName, '書類番号': docNoOf(masterRec) });
       return fillTemplate(JSZip, res[1], ext, values).then(function (out) { return withBills(ext, out, ctx); }).then(function (out) { return withGreen(ext, out, ctx); }).then(function (out) {
-        var filename = buildFilename(ctx.projectName, docName, version, ext);
+        var filename = buildFilename(ctx.projectName, docName, version, ext, docNoOf(masterRec));
         return storeRow(record, ctx, docName, fieldText(masterRec[MF.stage]), version, filename, out.data).then(function (r) {
           r.unknown = out.unknown; r.empty = out.empty; r.billNote = out.billNote;
           return r;
@@ -1038,7 +1041,7 @@
     return Promise.all([projectRecord(ctx.projectId), readFile(file)]).then(function (res) {
       var record = res[0], cur = existingOf(record)[docName];
       var version = (cur ? cur.version : 0) + 1;
-      return storeRow(record, ctx, docName, fieldText(masterRec[MF.stage]), version, buildFilename(ctx.projectName, docName, version, ext), res[1]);
+      return storeRow(record, ctx, docName, fieldText(masterRec[MF.stage]), version, buildFilename(ctx.projectName, docName, version, ext, docNoOf(masterRec)), res[1]);
     });
   }
   // 書類保管の、指定した書類の最新版の行を、書き換えて保存する（change は、行の値を直接書き換える関数）
@@ -1399,12 +1402,14 @@
         var ok = hasTemplate(rec), kind = kindOf(rec);
         var row = el('div', 'display:flex;gap:10px;align-items:center;justify-content:space-between;padding:10px 12px;border:1px solid #e1e6ee;border-radius:10px;margin:8px 0;background:#fcfdff;flex-wrap:wrap'); row.setAttribute('data-doc-row', '1');
         var left = el('div', 'flex:1 1 200px');
-        left.appendChild(el('div', 'font-weight:bold;font-size:14px;color:#14233f', name));
+        var title = el('div', 'font-weight:bold;font-size:14px;color:#14233f', name);
+        if (docNoOf(rec)) { var chip = el('span', 'display:inline-block;font-size:11px;font-weight:bold;color:#1F3864;background:#e3eaf6;border-radius:8px;padding:0 7px;margin-right:6px;vertical-align:1px', docNoOf(rec)); chip.setAttribute('data-doc-no', '1'); title.insertBefore(chip, title.firstChild); }
+        left.appendChild(title);
         left.appendChild(el('div', 'font-size:12px;color:#666', (targetOf(rec) ? '【' + targetOf(rec) + '用】' : '') + fieldText(rec[MF.desc])));
         var state = el('div', 'font-size:12px;color:#1f4e79;margin-top:3px');
         if (ok && kind === 'plain') state.textContent = '雛形のまま使う書類（案件の情報は入れません）';
         else if (ex) {
-          state.appendChild(document.createTextNode('最新 v' + ex.version + ' ・ '));
+          state.appendChild(document.createTextNode('最新 第' + ex.version + '版 ・ '));
           var a = el('a', 'cursor:pointer;display:inline-block;padding:2px 12px;font-size:12px;border-radius:16px;' + BTN_SUB, '開く'); a.setAttribute('role', 'link');
           a.addEventListener('click', function () { openStored(existing[name]).catch(function (e) { setMsg((e && e.message) || '開けませんでした', true); }); });
           state.appendChild(a);
@@ -1415,7 +1420,7 @@
           }
         } else { state.textContent = '未作成'; state.style.cssText += ';display:inline-block;background:#eceff4;color:#5b6677;border-radius:10px;padding:1px 9px'; }
         left.appendChild(state);
-        var label = !ok ? '雛形が未登録' : !kind ? '確認中…' : kind === 'plain' ? '雛形を開く' : ex ? 'v' + (ex.version + 1) + ' を作成' : '作成して保存';
+        var label = !ok ? '雛形が未登録' : !kind ? '確認中…' : kind === 'plain' ? '雛形を開く' : ex ? '第' + (ex.version + 1) + '版を作成' : '作成して保存';
         var btn = el('button', 'padding:7px 16px;font-size:13px;font-weight:bold;cursor:pointer;border-radius:16px;font-family:inherit;' + BTN_MAIN, label); btn.type = 'button';
         btn.disabled = !ok || !kind;
         btn.addEventListener('click', function () {
@@ -1426,7 +1431,7 @@
             return;
           }
           var cur = existing[name];
-          if (cur && !btn.__ok) { askOk('「' + name + '」は v' + cur.version + ' まで作成済みです。v' + (cur.version + 1) + ' を作成しますか？', '作成する').then(function (g) { if (g) { btn.__ok = true; btn.click(); btn.__ok = false; } }); return; }
+          if (cur && !btn.__ok) { askOk('「' + name + '」は 第' + cur.version + '版 まで作成済みです。第' + (cur.version + 1) + '版 を作成しますか？', '作成する').then(function (g) { if (g) { btn.__ok = true; btn.click(); btn.__ok = false; } }); return; }
           // 作る前に、雛形に入れる案件くんの項目のうち、空のものを知らせる（空のまま作ると、その場所が空欄の書類になるため）
           var emptyNow = emptyFieldsOf(rec, ctx.values), unknownNow = unknownFieldsOf(rec, ctx.values);
           (emptyNow.length || unknownNow.length ? confirmMissing(name, emptyNow, unknownNow) : Promise.resolve(true)).then(function (go) {
@@ -1457,14 +1462,14 @@
           rev.addEventListener('click', function () { pick.click(); });
           pick.addEventListener('change', function () {
             var f = pick.files && pick.files[0]; if (!f) return;
-            if (!pick.__ok) { askOk('「' + f.name + '」を、「' + name + '」の v' + (ex.version + 1) + ' として登録しますか？', '登録する').then(function (g) { if (g) { pick.__ok = true; pick.dispatchEvent(new Event('change')); pick.__ok = false; } else pick.value = ''; }); return; }
+            if (!pick.__ok) { askOk('「' + f.name + '」を、「' + name + '」の 第' + (ex.version + 1) + '版 として登録しますか？', '登録する').then(function (g) { if (g) { pick.__ok = true; pick.dispatchEvent(new Event('change')); pick.__ok = false; } else pick.value = ''; }); return; }
             rev.disabled = true; setMsg('登録しています…', false);
             registerRevision(rec, f, ctx).then(function (r) {
               existing[name] = { version: r.version, filename: r.filename, data: r.data };
-              var done = function (more) { setMsg('v' + r.version + ' として登録しました：' + r.filename + (more || ''), false); updateStageLabels(); show(); };
+              var done = function (more) { setMsg('第' + r.version + '版 として登録しました：' + r.filename + (more || ''), false); updateStageLabels(); show(); };
               // 直したファイルを登録したら、そのPDFも、案件に自動で保存する（書き足したあとが、完成した形のため）
               if (!(PDF_SERVER_URL && ctx.caps && ctx.caps.pdf)) { done(''); return; }
-              setMsg('v' + r.version + ' として登録しました。PDFを作っています…（数秒〜十数秒かかります）', false);
+              setMsg('第' + r.version + '版 として登録しました。PDFを作っています…（数秒〜十数秒かかります）', false);
               return convertToPdf(ctx, name, existing[name], true).then(function (p) { existing[name].pdf = { fileKey: null, name: p.name }; done('\nPDFも保存しました：' + p.name); },
                 function (e) { done('\n（PDFは、保存できませんでした：' + ((e && e.message) || '') + '。「PDFにして保存」で、もう一度できます）'); });
             }).catch(function (e) { rev.disabled = false; setMsg((e && e.message) || '登録できませんでした', true); });

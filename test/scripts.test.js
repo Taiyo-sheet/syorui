@@ -139,7 +139,7 @@ test('e2e-check：雛形→差し込み→案件くんの書類保管表に保�
     const rows = mock.state.records['575'][0]['書類保管'].value;
     assert.deepStrictEqual(rows.map((x) => x.value['書類保管_版'].value), ['1', '2']);
     const f = rows[1].value['書類保管_ファイル'].value[0];
-    assert.strictEqual(f.name, '東京Aビル 改修工事_打合せ議事次第_v2.docx');
+    assert.strictEqual(f.name, '東京Aビル 改修工事_打合せ議事次第_第2版.docx');
     const zip = await JSZip.loadAsync(mock.state.files[f.fileKey].buf);
     const xml = await zip.file('word/document.xml').async('string');
     assert.match(xml, /打合せ議事次第 v2 /);

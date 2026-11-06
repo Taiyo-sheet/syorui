@@ -99,7 +99,7 @@ test('fieldText：桁区切りは「桁区切りを表示する」項目だけ�
 });
 
 test('ファイル名：使えない文字・改行を置き換える', () => {
-  assert.strictEqual(lib.buildFilename('A/B:C\n工事', '見積書', 3, 'xlsx'), 'A_B_C_工事_見積書_v3.xlsx');
+  assert.strictEqual(lib.buildFilename('A/B:C\n工事', '見積書', 3, 'xlsx'), 'A_B_C_工事_見積書_第3版.xlsx');
 });
 test('クエリの引用符をエスケープする', () => {
   assert.strictEqual(lib.quote('a"b\\c'), '"a\\"b\\\\c"');

@@ -55,9 +55,9 @@ const PAGE = (type) => `
   <div class="row hl"><b>橋梁区分</b>${type}</div>
   <div class="row" style="display:block"><b style="display:block;margin-bottom:6px">書類保管</b>
     <table class="sub"><tr><th>書類名</th><th>工程</th><th>版</th><th>作成日</th><th>ファイル</th></tr>
-    <tr><td>作業手順書</td><td>施工前の書類</td><td>1</td><td>2026-10-12</td><td>📎 第二多摩川橋_作業手順書_v1.docx</td></tr>
-    <tr><td>作業手順書</td><td>施工前の書類</td><td>2</td><td>2026-10-19</td><td>📎 第二多摩川橋_作業手順書_v2.docx</td></tr>
-    <tr><td>打合せ議事次第</td><td>打合せ・見積・提案</td><td>1</td><td>2026-10-19</td><td>📎 第二多摩川橋_打合せ議事次第_v1.docx</td></tr></table></div>
+    <tr><td>作業手順書</td><td>施工前の書類</td><td>1</td><td>2026-10-12</td><td>📎 第二多摩川橋_作業手順書_第1版.docx</td></tr>
+    <tr><td>作業手順書</td><td>施工前の書類</td><td>2</td><td>2026-10-19</td><td>📎 第二多摩川橋_作業手順書_第2版.docx</td></tr>
+    <tr><td>打合せ議事次第</td><td>打合せ・見積・提案</td><td>1</td><td>2026-10-19</td><td>📎 第二多摩川橋_打合せ議事次第_第1版.docx</td></tr></table></div>
 </div>`;
 
 (async () => {
