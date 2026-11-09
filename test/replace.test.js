@@ -361,3 +361,15 @@ test('グリーンファイル：工期（自・至）を、年・月・日の�
   assert.match(xml2, /<c r="L23" s="190"\/>/, '完了日が無いときは、空のまま');
   assert.strictEqual((await lib.greenFill(JSZip, await genkaBook(), { '📅施工予定日': '2026年12月3日' })).isGreen, false);
 });
+
+test('進捗から、いまの工程を決める（受注のあとは、施工予定日・施工実施日・施工完了日。失注・対応表にない進捗は、決めない）', () => {
+  const P = (v) => ({ 進捗: { type: 'SINGLE_LINE_TEXT', value: v } }), D = (c) => ({ [c]: { type: 'DATE', value: '2026-11-24' } });
+  const st = (...parts) => lib.stageOfRecord(Object.assign({}, ...parts));
+  assert.strictEqual(st(P('3.見積り格納')), '打合せ・見積・提案');
+  assert.strictEqual(st(P('4.受注')), '受注・準備');
+  assert.strictEqual(st(P('4.受注'), D('施工予定日_0')), '施工前の書類');
+  assert.strictEqual(st(P('4.受注'), D('施工予定日_0'), D('施工実施日')), '施工・試験');
+  assert.strictEqual(st(P('4.受注'), D('施工予定日_0'), D('施工実施日'), D('施工完了日')), '竣工');
+  assert.ok(!st(P('5.失注')), '失注は、決めない');
+  assert.ok(!st(P('9.まだ対応表にない')), '対応表にない進捗は、決めない');
+});

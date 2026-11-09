@@ -414,24 +414,13 @@ test('画面：進捗から、いまの工程を決めて、書類関係に案�
     await seed(mock);
     const rec = Object.assign({}, RECORD, { 進捗: { type: 'SINGLE_LINE_TEXT', value: '3.見積り格納' } });
     const { page, errors } = await openPage(browser, url, '/__page', rec);
-    const box = page.locator('[data-doc-stage]'); await box.waitFor();
-    assert.match(await box.textContent(), /3\.見積り格納.*打合せ・見積・提案/);
-    await page.locator('[data-doc-stage-open]').click();
+    assert.strictEqual(await page.locator('[data-doc-stage]').count(), 0, '「この工程の書類を開く」の案内は、出さない（ボタンは、「書類を作る」だけ）');
+    await page.locator('[data-doc-hub]').click();
     await page.getByText('工程別の書類：').waitFor();
     assert.strictEqual(await page.locator('details[data-stage][open]').getAttribute('data-stage'), '打合せ・見積・提案', '進捗の工程だけ、はじめから開く');
+    await page.getByText(/いまの進捗「3\.見積り格納」→ 工程「打合せ・見積・提案」を、開いています/).waitFor();
     assert.strictEqual(await page.locator('[data-doc-bills]').count(), 0, '請求の一覧は、既定では出ない（現場カルテで見る）。入れ物（案内）は、ある');
-    // 受注のあとは、施工予定日・施工実施日・施工完了日で、工程を決める。失注は、案内なし
-    const stageOf = async (extra) => { const q = await openPage(browser, url, '/__page', Object.assign({}, RECORD, extra)); await q.page.waitForTimeout(1500); const n = await q.page.locator('[data-doc-stage]').count(); return n ? await q.page.locator('[data-doc-stage]').textContent() : ''; };
-    const P = (v) => ({ 進捗: { type: 'SINGLE_LINE_TEXT', value: v } }), D = (c) => ({ [c]: { type: 'DATE', value: '2026-11-24' } });
-    assert.match(await stageOf(P('4.受注')), /受注・準備/);
-    assert.match(await stageOf(Object.assign(P('4.受注'), D('施工予定日_0'))), /施工前の書類/);
-    assert.match(await stageOf(Object.assign(P('4.受注'), D('施工予定日_0'), D('施工実施日'))), /施工・試験/);
-    assert.match(await stageOf(Object.assign(P('4.受注'), D('施工予定日_0'), D('施工実施日'), D('施工完了日'))), /竣工/);
-    assert.strictEqual(await stageOf(P('5.失注')), '', '失注は、案内なし');
-    // 進捗が、対応表にないとき：案内は出ない
-    const p2 = await openPage(browser, url, '/__page', Object.assign({}, RECORD, { 進捗: { type: 'SINGLE_LINE_TEXT', value: '9.まだ対応表にない' } }));
-    await p2.page.waitForTimeout(1500);
-    assert.strictEqual(await p2.page.locator('[data-doc-stage]').count(), 0, '対応表にない進捗では、案内を出さない');
+    // 工程を決める対応（受注のあと・失注・対応表にない進捗）は、replace.test.js の stageOfRecord の試験で確かめる
     assert.deepStrictEqual(errors, []);
   } finally { await browser.close(); await mock.close(); }
 });

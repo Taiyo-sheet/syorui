@@ -694,7 +694,7 @@
   // Node（テスト）から使うときは、ここまでの部品だけを渡して終わる
   if (typeof kintone === 'undefined') {
     if (typeof module !== 'undefined' && module.exports) {
-      module.exports = { greenFill: greenFill, genkaFill: genkaFill, billRowsOf: billRowsOf, orderBudgetOf: orderBudgetOf, wonEstimateOf: wonEstimateOf, budget02Of: budget02Of, excelSerial: excelSerial, isGenkaBook: isGenkaBook, canonicalMinutes: canonicalMinutes, stripMarkdown: stripMarkdown, emptyFieldsOf: emptyFieldsOf, formatMinutes: formatMinutes, maskForAI: maskForAI, summarizeLocal: summarizeLocal, checkText: checkText, extractText: extractText, tidyMemo: tidyMemo, fieldText: fieldText, replacePlaceholders: replacePlaceholders, fillTemplate: fillTemplate, hasPlaceholders: hasPlaceholders, guessTarget: guessTarget, buildFilename: buildFilename, buildValues: buildValues, quote: quote, SUB: SUB, MF: MF, today: today };
+      module.exports = { stageOfRecord: stageOfRecord, greenFill: greenFill, genkaFill: genkaFill, billRowsOf: billRowsOf, orderBudgetOf: orderBudgetOf, wonEstimateOf: wonEstimateOf, budget02Of: budget02Of, excelSerial: excelSerial, isGenkaBook: isGenkaBook, canonicalMinutes: canonicalMinutes, stripMarkdown: stripMarkdown, emptyFieldsOf: emptyFieldsOf, formatMinutes: formatMinutes, maskForAI: maskForAI, summarizeLocal: summarizeLocal, checkText: checkText, extractText: extractText, tidyMemo: tidyMemo, fieldText: fieldText, replacePlaceholders: replacePlaceholders, fillTemplate: fillTemplate, hasPlaceholders: hasPlaceholders, guessTarget: guessTarget, buildFilename: buildFilename, buildValues: buildValues, quote: quote, SUB: SUB, MF: MF, today: today };
     }
     return;
   }
@@ -1175,6 +1175,7 @@
         bar.appendChild(approveAll);
       }
       var list = el('div'), msg = el('div', 'font-size:13px;white-space:pre-line;position:sticky;top:0;z-index:3');
+      if (ctx.currentStage && ctx.progress) bar.appendChild(el('div', 'font-size:12px;color:#5b6677;margin:0 0 8px', '📌 いまの進捗「' + ctx.progress + '」→ 工程「' + ctx.currentStage + '」を、開いています'));
       if (autoNote && targets.length) bar.appendChild(el('div', 'font-size:12px;color:#666;margin-bottom:6px', autoNote));
       body.appendChild(msg); body.appendChild(bar); body.appendChild(list);
 
@@ -1732,15 +1733,7 @@
     // 画面に足す部品は、1つの入れ物（wrap）にまとめる。タブ表示プラグインの行の数え方に、影響しないように、部品の数を、増やさない・場合によって変えない
     var wrap = el('div', '');
     wrap.setAttribute('data-doc-bills-wrap', '1');
-    var prog = (record[PROGRESS_LABEL] && record[PROGRESS_LABEL].value) || '', stage = stageOfRecord(record);
-    if (stage) {
-      var ban = el('div', 'margin:4px 0 8px;border:1px solid #f0d9a8;border-radius:6px;background:#fff8e6;padding:8px 10px;max-width:760px;font-size:13px;display:flex;gap:10px;align-items:center;flex-wrap:wrap');
-      ban.setAttribute('data-doc-stage', '1');
-      ban.appendChild(el('div', 'flex:1;min-width:220px', '📌 いまの進捗' + (prog ? '「' + prog + '」' : '') + '　→　工程「' + stage + '」の書類を、まとめて作れます。'));
-      var sb = el('button', 'padding:6px 12px;font-size:13px;font-weight:bold;cursor:pointer', 'この工程の書類を開く'); sb.type = 'button'; sb.setAttribute('data-doc-stage-open', '1');
-      sb.addEventListener('click', function () { var hub0 = document.querySelector('[data-doc-hub]'); if (hub0) hub0.click(); });
-      ban.appendChild(sb); wrap.appendChild(ban);
-    }
+    // （「この工程の書類を開く」の案内は、「書類を作る」と同じ働きのため、なくした。工程は、「書類を作る」を押したとき、いまの進捗の工程が、はじめから開く）
     var placeWrap = function () {
       var tries0 = 0;
       var timer0 = setInterval(function () {
@@ -1815,7 +1808,7 @@
         NAME_LABELS.some(function (l) { if (values[l]) { projectName = values[l]; return true; } return false; });
         openPanel({
           values: values, caps: caps, projectId: projectId, projectName: projectName || ('案件' + projectId),
-          currentStage: values[STAGE_LABEL] || stageOfRecord(record), target: TARGET_LABEL ? values[TARGET_LABEL] || '' : '', guessedTarget: guessTarget(projectName)
+          currentStage: values[STAGE_LABEL] || stageOfRecord(record), progress: (record[PROGRESS_LABEL] && record[PROGRESS_LABEL].value) || '', target: TARGET_LABEL ? values[TARGET_LABEL] || '' : '', guessedTarget: guessTarget(projectName)
         });
       });
     });
