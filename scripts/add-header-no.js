@@ -49,7 +49,7 @@ async function patch(buf) {
     const f = fs.readdirSync(dir).find((x) => /\.docx$/i.test(x));
     if (!f) { console.log('NG ' + doc + '：Wordの雛形が取り出せません'); continue; }
     const r = await patch(fs.readFileSync(path.join(dir, f)));
-    const out = path.join(dir, 'new_' + f); fs.writeFileSync(out, r.data);
+    const outDir = path.join(dir, 'out'); fs.mkdirSync(outDir, { recursive: true }); const out = path.join(outDir, f); fs.writeFileSync(out, r.data);   // ファイル名は、もとのまま（new_ などを付けない）
     // 見え方の確認：置き換えて、文字を読む
     const filled = await lib.fillTemplate(JSZip, r.data, 'docx', { '書類番号': '09', '版': '第1版', '工事名称': 'テスト工事' });
     const z = await JSZip.loadAsync(Buffer.from(filled.data));
