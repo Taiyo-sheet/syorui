@@ -70,10 +70,10 @@ async function main() {
   const have = new Set(all.records.map((r) => (r['書類番号'] || {}).value).filter((v) => /^TS-RH-/.test(v || '')));
   const mappedNos = new Set(Object.values(EXIST).map(NO));
   const toAdd = files.filter((x) => !mappedNos.has(x.no) && !have.has(x.no));
-  const upd = all.records.map((r) => { const n = r['書類名'].value, c = EXIST[n]; return { id: r.$id.value, name: n, no: c ? NO(c) : '', dist: c ? ((byNo[NO(c)] || {}).dist || (c === 'PRO' ? '配布可' : '')) : '', cur: (r['書類番号'] || {}).value || '' }; });
+  const upd = all.records.filter((r) => EXIST[r['書類名'].value]).map((r) => { const n = r['書類名'].value, c = EXIST[n]; return { id: r.$id.value, name: n, no: c ? NO(c) : '', dist: c ? ((byNo[NO(c)] || {}).dist || (c === 'PRO' ? '配布可' : '')) : '', cur: (r['書類番号'] || {}).value || '' }; });
   console.log('Boxの書類 ' + files.length + '件／既存の使用中 ' + all.records.length + '件');
-  console.log('既存：番号を入れ替える ' + upd.filter((u) => u.no).length + '件／番号を空にする ' + upd.filter((u) => !u.no && u.cur).length + '件');
-  upd.filter((u) => !u.no).forEach((u) => console.log('   番号なし（台帳に、対応が見つからない）：' + u.name));
+  console.log('既存：番号・配布区分を入れる ' + upd.length + '件');
+  all.records.filter((r) => !EXIST[r['書類名'].value] && !/^TS-RH-/.test((r['書類番号'] || {}).value || '')).forEach((r) => console.log('   番号なし（台帳に、対応が見つからない）：' + r['書類名'].value));
   console.log('新しく追加 ' + toAdd.length + '件');
   if (!go) { toAdd.slice(0, 6).forEach((x) => console.log('   ' + x.no + '  ' + x.name + '  [' + (STAGE[x.code] || '受注・準備') + '／' + x.dist + ']')); console.log('\n※ 確認だけです。--form --yes ／ --records --yes で実行します'); return; }
   if (!hasBackup()) { console.error('バックアップがありません。先に  npm run backup -- 879'); process.exit(3); }
@@ -117,6 +117,7 @@ async function main() {
       const r = all.records.find((q) => q.$id.value === u.id), f0 = ((r['雛形'] || {}).value || [])[0]; if (!f0) continue;
       const ext0 = (f0.name.match(/\.([^.]+)$/) || [])[1];
       if (ext0 !== x.ext) continue;
+      if (f0.name === x.fname) continue;   // すでに、Boxの正本が先頭にある（二重に差し替えない）
       const txt = await lib.extractText(JSZip, Buffer.from(await k.download(f0.fileKey)), ext0);
       if (/\{\{[^{}]+\}\}/.test(txt)) continue;   // 自動入力のある雛形は、そのまま
       const pr = spawnSync('node', [path.join(__dirname, 'template-tool.js'), 'put', '--doc=' + u.name, '--file=' + x.file, '--yes'], { encoding: 'utf8' });
