@@ -2,3 +2,7 @@ node_modules/
 backup/
 .env
 !data/
+
+# 鍵を含む、反映用の一時ファイル（リポジトリに入れない）
+customize-local/
+customize-manifest-*-local.json
