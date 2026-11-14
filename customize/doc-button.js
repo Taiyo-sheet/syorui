@@ -23,7 +23,7 @@
 
   var APP_NAMES = { master: '書類マスタ' };
   // 書類マスタの項目コード（scripts/create-apps.js で作ると、この名前になる）
-  var MF = { stage: '工程', order: '表示順', name: '書類名', desc: '説明', template: '雛形', audience: '見られる立場', target: '対象', status: '使用状況', docNo: '書類番号' };
+  var MF = { stage: '工程', order: '表示順', name: '書類名', desc: '説明', template: '雛形', audience: '見られる立場', target: '対象', status: '使用状況', docNo: '書類番号', dist: '配布区分' };
   // 案件くんの「書類保管」表（scripts/add-doc-storage.js で足す）の項目コード
   var SUB = { table: '書類保管', name: '書類保管_書類名', stage: '書類保管_工程', version: '書類保管_版', file: '書類保管_ファイル', at: '書類保管_作成日',
     // 承認とPDF（scripts/add-approval-fields.js で、書類保管の表に足す列。足すまでは、承認・PDF化のボタンは出ない）
@@ -515,11 +515,12 @@
   var BRIDGE = /高架|跨線|橋梁|[^\s\u3000橋]橋(?![本口田爪立場詰間])/;
   function guessTarget(name) { return BRIDGE.test(String(name || '')) ? '橋梁' : '一般道路'; }
   function safeName(s) { return String(s).replace(/[\u0000-\u001F\\\/:*?"<>|]/g, '_').slice(0, 120); }
-  // ファイル名：「番号_書類名_案件名_第N版」（書類マスタに書類番号があるとき）／「案件名_書類名_第N版」（ないとき）
-  function docNoOf(rec) { var n = String(fieldText(rec && rec[MF.docNo]) || '').trim(); return /^\d+$/.test(n) && n.length < 2 ? '0' + n : n; }
+  // ファイル名：「文書番号_書類名_案件名_v01」（書類マスタに書類番号＝Boxの文書番号があるとき。Boxの決まりに合わせた）／「案件名_書類名_v01」（ないとき）
+  function docNoOf(rec) { return String(fieldText(rec && rec[MF.docNo]) || '').trim(); }
+  function distOf(rec) { return String(fieldText(rec && rec[MF.dist]) || '').trim(); }
   function buildFilename(projectName, docName, version, ext, docNo) {
     var base = docNo ? docNo + '_' + docName + '_' + projectName : projectName + '_' + docName;
-    return safeName(base + '_第' + version + '版') + (ext ? '.' + ext : '');
+    return safeName(base + '_v' + (version < 10 ? '0' : '') + version) + (ext ? '.' + ext : '');
   }
   function quote(s) { return '"' + String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"'; }
 
@@ -1405,6 +1406,8 @@
         var left = el('div', 'flex:1 1 200px');
         var title = el('div', 'font-weight:bold;font-size:14px;color:#14233f', name);
         if (docNoOf(rec)) { var chip = el('span', 'display:inline-block;font-size:11px;font-weight:bold;color:#1F3864;background:#e3eaf6;border-radius:8px;padding:0 7px;margin-right:6px;vertical-align:1px', docNoOf(rec)); chip.setAttribute('data-doc-no', '1'); title.insertBefore(chip, title.firstChild); }
+        var dist = distOf(rec);
+        if (dist) { var dc = { '配布可': 'background:#e1f3e7;color:#1f7a3d', 'NDA限定': 'background:#fff1d6;color:#a05a00', '社内限定': 'background:#fde7e4;color:#a8281b' }[dist] || 'background:#eceff4;color:#5b6677'; var dchip = el('span', 'display:inline-block;font-size:11px;font-weight:bold;border-radius:8px;padding:0 7px;margin-left:6px;vertical-align:1px;' + dc, dist); dchip.setAttribute('data-doc-dist', dist); title.appendChild(dchip); }
         left.appendChild(title);
         left.appendChild(el('div', 'font-size:12px;color:#666', (targetOf(rec) ? '【' + targetOf(rec) + '用】' : '') + fieldText(rec[MF.desc])));
         var state = el('div', 'font-size:12px;color:#1f4e79;margin-top:3px');

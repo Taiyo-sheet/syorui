@@ -99,7 +99,7 @@ test('fieldText：桁区切りは「桁区切りを表示する」項目だけ�
 });
 
 test('ファイル名：使えない文字・改行を置き換える', () => {
-  assert.strictEqual(lib.buildFilename('A/B:C\n工事', '見積書', 3, 'xlsx'), 'A_B_C_工事_見積書_第3版.xlsx');
+  assert.strictEqual(lib.buildFilename('A/B:C\n工事', '見積書', 3, 'xlsx'), 'A_B_C_工事_見積書_v03.xlsx');
 });
 test('クエリの引用符をエスケープする', () => {
   assert.strictEqual(lib.quote('a"b\\c'), '"a\\"b\\\\c"');
@@ -372,4 +372,10 @@ test('進捗から、いまの工程を決める（受注のあとは、施工�
   assert.strictEqual(st(P('4.受注'), D('施工予定日_0'), D('施工実施日'), D('施工完了日')), '竣工');
   assert.ok(!st(P('5.失注')), '失注は、決めない');
   assert.ok(!st(P('9.まだ対応表にない')), '対応表にない進捗は、決めない');
+});
+
+test('ファイル名：文書番号があれば「文書番号_書類名_案件名_v01」、なければ「案件名_書類名_v01」（Boxの決まり）', () => {
+  assert.strictEqual(lib.buildFilename('テスト工事', '作業手順書', 1, 'docx', 'TS-RH-WPR-2611'), 'TS-RH-WPR-2611_作業手順書_テスト工事_v01.docx');
+  assert.strictEqual(lib.buildFilename('テスト工事', '作業手順書', 12, 'docx', ''), 'テスト工事_作業手順書_v12.docx');
+  assert.strictEqual(lib.buildFilename('A/B', '見積書', 3, 'xlsx'), 'A_B_見積書_v03.xlsx');
 });

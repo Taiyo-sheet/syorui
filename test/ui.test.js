@@ -131,7 +131,7 @@ test('画面：ボタン表示→工程・立場の絞り込み→作成して�
     await openStage(page, '打合せ・見積・提案');
     // 作成すると、保存と同時に、その場でダウンロードされる
     const [dl1] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: '作成して保存' }).click()]);
-    await page.getByText(/保存してダウンロードしました：東京Aビル 改修工事_打合せ議事次第_第1版\.docx/).waitFor();
+    await page.getByText(/保存してダウンロードしました：東京Aビル 改修工事_打合せ議事次第_v01\.docx/).waitFor();
     const got = []; for await (const c of await dl1.createReadStream()) got.push(c);
     const docs = stored(mock);
     assert.strictEqual(docs.length, 1);
@@ -158,7 +158,7 @@ test('画面：ボタン表示→工程・立場の絞り込み→作成して�
     const again = []; for await (const c of await dlOpen.createReadStream()) again.push(c);
     assert.ok(Buffer.concat(again).equals(mock.state.files[f.fileKey].buf), '「開く」で、保存した書類が取り出せる');
     await page.getByRole('button', { name: '第2版を作成' }).click();
-    await page.getByText(/_第2版\.docx/).waitFor();
+    await page.getByText(/_v02\.docx/).waitFor();
     assert.deepStrictEqual(stored(mock).map((r) => r.version), ['1', '2'], 'v1 の行は残り、v2 が足される');
     assert.deepStrictEqual(errors, [], 'ブラウザのエラーなし');
   } finally { await browser.close(); await mock.close(); }
@@ -176,7 +176,7 @@ test('画面：まとめて作成（雛形のある書類だけ）', { skip }, a
     await page.getByText('1件を保存しました').waitFor();   // 雛形が未登録の1件は対象外
     assert.deepStrictEqual(stored(mock).map((r) => r.name), ['現状確認シート']);
     const f = stored(mock)[0].file;
-    assert.strictEqual(f.name, '東京Aビル 改修工事_現状確認シート_第1版.xlsx');
+    assert.strictEqual(f.name, '東京Aビル 改修工事_現状確認シート_v01.xlsx');
     assert.deepStrictEqual(errors, []);
   } finally { await browser.close(); await mock.close(); }
 });
@@ -271,7 +271,7 @@ test('画面：対象（橋梁／一般道路）で、仕様書を出し分け�
     await page.getByRole('button', { name: '作成して保存' }).first().waitFor();
     assert.strictEqual(await page.getByText('【一般道路用】').count(), 1, '説明の行に対象を表示');
     await page.locator('div[data-doc-row]', { hasText: '仕様書（一般道路）' }).getByRole('button').click();
-    await page.getByText(/_仕様書（一般道路）_第1版\.docx/).waitFor();
+    await page.getByText(/_仕様書（一般道路）_v01\.docx/).waitFor();
     assert.deepStrictEqual(stored(mock).map((r) => r.name), ['仕様書（一般道路）']);
     assert.deepStrictEqual(errors, []);
   } finally { await browser.close(); await mock.close(); }
@@ -346,13 +346,13 @@ test('画面：直したファイルを、次の版として登録できる', { 
     await page.getByText('工程別の書類：').waitFor();
     await openStage(page, '打合せ・見積・提案');
     await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: '作成して保存' }).click()]);
-    await page.getByText(/_第1版\.docx/).waitFor();
+    await page.getByText(/_v01\.docx/).waitFor();
     await page.reload(); await page.evaluate((r) => window.__fire(r), RECORD);
     await page.locator('[data-doc-hub]').click();
     await openStage(page, '打合せ・見積・提案');
     await page.getByText('最新 第1版').waitFor();
     await page.locator('input[data-revision="打合せ議事次第"]').setInputFiles({ name: '直した議事次第.docx', mimeType: 'application/octet-stream', buffer: tpl.docx });
-    await page.getByText(/第2版 として登録しました：東京Aビル 改修工事_打合せ議事次第_第2版\.docx/).waitFor();
+    await page.getByText(/第2版 として登録しました：東京Aビル 改修工事_打合せ議事次第_v02\.docx/).waitFor();
     const rows = stored(mock);
     assert.deepStrictEqual(rows.map((r) => r.version), ['1', '2'], 'v1 は残り、v2 が足される');
     assert.ok(mock.state.files[rows[1].file.fileKey].buf.equals(tpl.docx), '直したファイルの中身が、そのまま保存される');
@@ -385,7 +385,7 @@ test('画面：直したファイルを登録すると、そのPDFも案件に�
     };
     await open();
     await Promise.all([page.waitForEvent('download'), page.locator('details[data-stage][open]').getByRole('button', { name: '作成して保存' }).click()]);
-    await page.getByText(/_第1版\.docx/).waitFor();
+    await page.getByText(/_v01\.docx/).waitFor();
     await open(); await page.getByText('最新 第1版').waitFor();
     await page.locator('input[data-revision="打合せ議事次第"]').setInputFiles({ name: '直した.docx', mimeType: 'application/octet-stream', buffer: tpl.docx });
     await page.getByText(/PDFも保存しました/).waitFor();
@@ -644,7 +644,7 @@ test('画面：書類関係の承認（承認者と日時が残る）。新し�
     await page.getByText('工程別の書類：').waitFor();
     await openStage(page, '打合せ・見積・提案');
     await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: '作成して保存' }).click()]);
-    await page.getByText(/_第1版\.docx/).waitFor();
+    await page.getByText(/_v01\.docx/).waitFor();
     await page.reload(); await page.evaluate((r) => window.__fire(r), RECORD);
     await page.locator('[data-doc-hub]').click();
     await openStage(page, '打合せ・見積・提案');
@@ -659,7 +659,7 @@ test('画面：書類関係の承認（承認者と日時が残る）。新し�
     await page.getByText(/承認済み（/).waitFor();
     // 新しい版（v2）を作ると、v2 は未承認（v1 の承認は残る）
     await page.getByRole('button', { name: '第2版を作成' }).click();
-    await page.getByText(/_第2版\.docx/).waitFor();
+    await page.getByText(/_v02\.docx/).waitFor();
     const rows = mock.state.records['575'][0]['書類保管'].value;
     assert.strictEqual(rows.length, 2);
     assert.strictEqual(rows[0].value['書類保管_承認状況'].value, '承認済み', 'v1 の承認は残る');
@@ -691,7 +691,7 @@ test('画面：PDF化は、承認済みの書類だけ。サーバー未設定�
     };
     await open();
     await Promise.all([page.waitForEvent('download'), page.locator('details[data-stage][open]').getByRole('button', { name: '作成して保存' }).click()]);
-    await page.getByText(/_第1版\.docx/).waitFor();
+    await page.getByText(/_v01\.docx/).waitFor();
     await open();
     // 未承認の書類には、PDF化がない
     assert.strictEqual(await page.getByRole('button', { name: /PDF化/ }).count(), 1, '定型の書類（提案書などを除く）は、承認前でも、PDFのボタンが出る');
@@ -705,7 +705,7 @@ test('画面：PDF化は、承認済みの書類だけ。サーバー未設定�
     await page.getByText(/PDFを保存しました/).waitFor();
     const row = mock.state.records['575'][0]['書類保管'].value[0].value;
     const pdf = row['書類保管_PDF'].value[0];
-    assert.match(pdf.name, /_打合せ議事次第_第1版\.pdf$/);
+    assert.match(pdf.name, /_打合せ議事次第_v01\.pdf$/);
     assert.ok(mock.state.files[pdf.fileKey].buf.slice(0, 5).toString() === '%PDF-', 'PDFが保存される');
     assert.strictEqual(row['書類保管_承認状況'].value, '承認済み', 'PDF化しても、承認は残る');
     assert.strictEqual(row['書類保管_ファイル'].value.length, 1, '元のWordも残る');
@@ -1016,7 +1016,7 @@ test('画面：議事録は、保存と同時に、PDFも、案件に自動で�
     await page.getByText(/PDFも保存しました/).waitFor();
     let row = mock.state.records['575'][0]['書類保管'].value[0].value;
     const pdf = row['書類保管_PDF'].value[0];
-    assert.match(pdf.name, /_議事録まとめ_第1版\.pdf$/); assert.strictEqual(mock.state.files[pdf.fileKey].buf.slice(0, 5).toString(), '%PDF-', 'PDFが、自動で保存される');
+    assert.match(pdf.name, /_議事録まとめ_v01\.pdf$/); assert.strictEqual(mock.state.files[pdf.fileKey].buf.slice(0, 5).toString(), '%PDF-', 'PDFが、自動で保存される');
     assert.strictEqual((row['書類保管_承認状況'] || {}).value || '', '', '承認は、していない（承認を待たずに、PDFを作る）');
     // PDFサーバーに届かない：議事録は、保存されている
     mock.state.records['575'][0]['書類保管'].value = []; server = false;
@@ -1076,7 +1076,7 @@ test('画面：議事録の自動PDFを止めたとき（AUTO_PDF_MINUTES=false�
     await page.getByText(/PDFを保存しました/).waitFor();
     row = mock.state.records['575'][0]['書類保管'].value[0].value;
     const pdf = row['書類保管_PDF'].value[0];
-    assert.match(pdf.name, /_議事録まとめ_第1版\.pdf$/); assert.strictEqual(mock.state.files[pdf.fileKey].buf.slice(0, 5).toString(), '%PDF-', 'PDFが保存される');
+    assert.match(pdf.name, /_議事録まとめ_v01\.pdf$/); assert.strictEqual(mock.state.files[pdf.fileKey].buf.slice(0, 5).toString(), '%PDF-', 'PDFが保存される');
     assert.strictEqual((row['書類保管_承認状況'] || {}).value || '', '', '承認は、していない（承認を待たずに、PDFを作る）');
     // PDFサーバーに届かない：議事録は、保存されている。PDFのボタンは、失敗を知らせる
     mock.state.records['575'][0]['書類保管'].value = []; server = false;
