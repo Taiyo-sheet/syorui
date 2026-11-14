@@ -36,6 +36,7 @@ async function main() {
     for (const env of ['desktop', 'mobile']) {
       for (const it of (c[env] && c[env].js) || []) {
         if (!it.file) continue;
+        if (it.file.name === 'taiyo-login-link.js') continue;   // ログイン用の道具（ボタンではない。鍵ではなく、押した人のログインで開く）。他のセッションの管理
         let t; try { t = Buffer.from(await k.download(it.file.fileKey)).toString('utf8'); } catch (e) { continue; }
         const r = analyze(t);
         if (r) found.push({ app, env, name: it.file.name, hasKey: r.hasKey, d: r.key ? digest(r.key) : '' });
